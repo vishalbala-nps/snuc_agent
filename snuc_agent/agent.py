@@ -29,12 +29,18 @@ def getModel() -> LiteLlm | str:
     else:
         raise ValueError("Unsupported model! Cannot start agent")
 
+model = getModel()
+
+# The static/dynamic instruction split only benefits Gemini (context caching);
+# local models handle a single merged system instruction more reliably.
+is_gemini = isinstance(model, str)
+
 root_agent = Agent(
-    model=getModel(),
+    model=model,
     name='root_agent',
     description='A helpful assistant for user questions.',
-    static_instruction=prompts.STATIC_INSTRUCTION,
-    instruction=prompts.DYNAMIC_INSTRUCTION,
+    static_instruction=prompts.STATIC_INSTRUCTION if is_gemini else None,
+    instruction=prompts.DYNAMIC_INSTRUCTION if is_gemini else prompts.STATIC_INSTRUCTION + prompts.DYNAMIC_INSTRUCTION,
     tools=[
         get_moodle_details,
         get_digiicampus_details,

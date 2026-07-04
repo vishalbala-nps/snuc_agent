@@ -25,7 +25,7 @@ def getModel() -> LiteLlm | str:
         os.environ["GOOGLE_API_KEY"] = key
         return variant
     elif model_type == "ollama":
-        return LiteLlm("ollama_chat/" + variant, additional_args={"nothink": True})
+        return LiteLlm("ollama_chat/" + variant, additional_args={"think": False})
     else:
         raise ValueError("Unsupported model! Cannot start agent")
 
@@ -34,5 +34,5 @@ root_agent = Agent(
     name='root_agent',
     description='A helpful assistant for user questions.',
     instruction=prompts.SYSTEM_INSTRUCTION,
-    tools=[get_moodle_details,get_digiicampus_details,get_digiicampus_posts]
+    tools=[get_moodle_details,get_digiicampus_details,get_digiicampus_posts,get_digiicampus_user_id,get_mentor_details]
 )

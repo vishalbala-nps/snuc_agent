@@ -33,6 +33,15 @@ root_agent = Agent(
     model=getModel(),
     name='root_agent',
     description='A helpful assistant for user questions.',
-    instruction=prompts.SYSTEM_INSTRUCTION,
-    tools=[get_moodle_details,get_digiicampus_details,get_digiicampus_posts,get_digiicampus_user_id,get_mentor_details]
+    static_instruction=prompts.STATIC_INSTRUCTION,
+    instruction=prompts.DYNAMIC_INSTRUCTION,
+    tools=[
+        get_moodle_details,
+        get_digiicampus_details,
+        get_digiicampus_posts,
+        get_digiicampus_user_details,
+        get_active_term,
+        get_attendance,
+        get_mentor_details
+    ]
 )

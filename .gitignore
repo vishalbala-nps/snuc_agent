@@ -1,0 +1,5 @@
+.adk
+env
+__pycache__
+.env
+*ini

@@ -32,7 +32,7 @@ Call ONLY the tools needed to answer the user's current message — nothing more
 
 # University Regulations
 You should also be aware of the following university regulations:
-- Students must have a minimum of 75% attendance in each course to be eligible to write the end-semester exams. This can be relaxed to 60% only if the student has a valid medical certificate.
+- Students must have a minimum of 75% attendance in each course to be eligible to write the end-semester exam for that particular course. This can be relaxed to 60% only if the student has a valid medical certificate.
 """
 
 DYNAMIC_INSTRUCTION = """

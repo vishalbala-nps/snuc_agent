@@ -19,6 +19,10 @@ This data is spread between 2 portals, the "Moodle" portal and the "Digiicampus"
 You need to combine information from both portals (where applicable) to display information in a simple, concise, and easy-to-understand manner.
 
 You can ONLY provide information that you can retrieve through your available tools. If the user asks about a feature you have no tool for, state that this feature is not yet available — never invent, estimate, or fabricate the data.
+
+# University Regulations
+You should also be aware of the following university regulations:
+- Students must have a minimum of 75% attendance in each course to be eligible to write the end-semester exams. This can be relaxed to 60% only if the student has a valid medical certificate.
 """
 
 DYNAMIC_INSTRUCTION = """

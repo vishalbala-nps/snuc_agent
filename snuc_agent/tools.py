@@ -184,6 +184,44 @@ def get_digiicampus_posts(tool_context: ToolContext) -> dict:
     return {"status": "success", "posts": posts}
 
 
+def get_outpass_requests(tool_context: ToolContext) -> dict:
+    """
+    Gets the user's outpass requests from the Digiicampus. Handles authentication automatically.
+
+    Parameters: None
+
+    Returns:
+    {"status":"success","requests":[{"request_id":<ID>,"service":"<SERVICE TITLE>","request_status":"<ongoing|closed>","action_taken":"<ACTION TAKEN>","action_type":"<positive|negative>","last_updated":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch. Empty list if there are no outpass requests.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting a request:
+    - request_status "ongoing" means the request is still being processed; "closed" means it has been completed.
+    - action_taken is the latest action taken on the request (e.g. "Approved").
+    - last_updated is when the request was last acted upon; the request with the most recent last_updated is the user's latest outpass. Requests are not guaranteed to be in any order.
+    - action_type is the meaning of that action for the user: "positive" means a favourable outcome (e.g. the outpass was approved/granted), "negative" means an unfavourable outcome (e.g. the outpass was rejected/denied).
+    - request_id and action_type are INTERNAL fields: use them to reason about the requests, but NEVER show them in your answer to the user. Describe each request in plain language using service, request_status, action_taken and the meaning of action_type (e.g. "Day Scholar Pass — closed, approved").
+    """
+    try:
+        token = _ensure_digiicampus_auth(tool_context.state)
+        request_data = digiicampus_api_get("/rest/campusHelpCentre/requests/v2", token)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Outpass requests: " + str(e)}
+
+    outpass_requests = []
+    for request in request_data.get("requests", []):
+        outpass_requests.append({
+            "request_id": request.get("requestId", ""),
+            "service": request.get("serviceTitle", ""),
+            "request_status": request.get("requestStatus", ""),
+            "action_taken": request.get("actionTakenName", ""),
+            "action_type": request.get("actionType", ""),
+            "last_updated": request.get("lastUpdatedOn", "")
+        })
+    return {"status": "success", "requests": outpass_requests}
+
+
 def get_user_profile(tool_context: ToolContext) -> dict:
     """
     Gets the user's profile details: name, email, section, department, programme and batch year. Handles authentication automatically.

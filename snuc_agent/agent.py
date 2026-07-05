@@ -39,6 +39,7 @@ root_agent = Agent(
     static_instruction=prompts.STATIC_INSTRUCTION,
     tools=[
         get_digiicampus_posts,
+        get_outpass_requests,
         get_attendance,
         get_mentor_details
     ]

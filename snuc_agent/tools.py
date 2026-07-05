@@ -150,7 +150,7 @@ def _ensure_terms(state) -> str:
 
 def get_digiicampus_posts(tool_context: ToolContext) -> dict:
     """
-    Gets the latest posts from the user's Digiicampus feed, newest first. Handles authentication automatically.
+    Gets the latest posts from the user's Digiicampus feed, newest first. 
 
     Parameters: None
 
@@ -186,18 +186,18 @@ def get_digiicampus_posts(tool_context: ToolContext) -> dict:
 
 def get_outpass_requests(tool_context: ToolContext) -> dict:
     """
-    Gets the user's outpass requests from the Digiicampus. Handles authentication automatically.
+    Gets the user's outpass requests from the Digiicampus, sorted newest first by last_updated. 
 
     Parameters: None
 
     Returns:
-    {"status":"success","requests":[{"request_id":<ID>,"service":"<SERVICE TITLE>","request_status":"<ongoing|closed>","action_taken":"<ACTION TAKEN>","action_type":"<positive|negative>","last_updated":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch. Empty list if there are no outpass requests.
+    {"status":"success","requests":[{"request_id":"<ID>","service":"<SERVICE TITLE>","request_status":"<ongoing|closed>","action_taken":"<ACTION TAKEN>","action_type":"<positive|negative>","last_updated":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch. Empty list if there are no outpass requests.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
     Notes on interpreting a request:
+    - Requests are sorted newest first by last_updated: the FIRST request in the list is the user's latest (most recently acted-upon) outpass.
     - request_status "ongoing" means the request is still being processed; "closed" means it has been completed.
     - action_taken is the latest action taken on the request (e.g. "Approved").
-    - last_updated is when the request was last acted upon; the request with the most recent last_updated is the user's latest outpass. Requests are not guaranteed to be in any order.
     - action_type is the meaning of that action for the user: "positive" means a favourable outcome (e.g. the outpass was approved/granted), "negative" means an unfavourable outcome (e.g. the outpass was rejected/denied).
     - request_id and action_type are INTERNAL fields: use them to reason about the requests, but NEVER show them in your answer to the user. Describe each request in plain language using service, request_status, action_taken and the meaning of action_type (e.g. "Day Scholar Pass — closed, approved").
     """
@@ -212,19 +212,91 @@ def get_outpass_requests(tool_context: ToolContext) -> dict:
     outpass_requests = []
     for request in request_data.get("requests", []):
         outpass_requests.append({
-            "request_id": request.get("requestId", ""),
+            "request_id": str(request.get("requestId", "")),
             "service": request.get("serviceTitle", ""),
             "request_status": request.get("requestStatus", ""),
             "action_taken": request.get("actionTakenName", ""),
             "action_type": request.get("actionType", ""),
             "last_updated": request.get("lastUpdatedOn", "")
         })
+    # Sort in code so the model never has to compare timestamps itself.
+    # ISO-style "YYYY-MM-DD HH:MM:SS" strings sort correctly lexicographically;
+    # empty timestamps sink to the end.
+    outpass_requests.sort(key=lambda r: r["last_updated"] or "", reverse=True)
     return {"status": "success", "requests": outpass_requests}
+
+
+def get_outpass_details(request_id: str, tool_context: ToolContext) -> dict:
+    """
+    Gets the full details of a single outpass request, including its reason and approval progress. 
+
+    Parameters:
+    request_id: The id of the outpass request, as returned by the get_outpass_requests tool.
+
+    Returns:
+    {"status":"success","details":{"service":"<SERVICE TITLE>","request_id":"<ID>","created_on":"<YYYY-MM-DD HH:MM:SS>","last_updated":"<YYYY-MM-DD HH:MM:SS>","description":"<REASON GIVEN BY THE USER>","progress":[{"title":"<STEP>","created_on":"<YYYY-MM-DD HH:MM:SS>","action_taken":"<ACTION>","action_type":"<positive|negative>","action_taken_on":"<YYYY-MM-DD HH:MM:SS>","handled_by":{"name":"<NAME>","phone":"<PHONE>","email":"<EMAIL>"}}, ...]}} -> Successful fetch.
+    {"status":"error","message":"No outpass request exists with request_id <ID>. Use a request_id returned by the get_outpass_requests tool."} -> The given request_id does not exist. You may call get_outpass_requests to find the correct id and retry ONCE with it.
+    {"status":"error","message":"<OTHER ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the details:
+    - description is the reason the user gave when requesting the outpass.
+    - progress lists the approval steps in order. The first step (title "Created") is the submission of the request itself, so its action_taken, action_type, action_taken_on and handled_by are empty.
+    - For the other steps, action_taken is what the handler did, action_type is its meaning ("positive" = favourable, "negative" = unfavourable), action_taken_on is when, and handled_by is the person who handled that step.
+    - For "Day Scholar Pass" requests, the approval stages mean: "Working day outpass_Parent" = approval by the student's PARENT; "Working day outpass_Admin" = approval by the student's MENTOR. Refer to the stages as "parent approval" / "mentor approval" when answering.
+    - request_id, action_type and the raw stage titles are INTERNAL fields: use them to reason, but NEVER show them in your answer to the user.
+    """
+    try:
+        token = _ensure_digiicampus_auth(tool_context.state)
+        request_data = digiicampus_api_get("/rest/campusHelpCentre/requests/" + str(request_id) + "/v3", token)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return {"status": "error", "message": "No outpass request exists with request_id " + str(request_id) + ". Use a request_id returned by the get_outpass_requests tool."}
+        return {"status": "error", "message": "Failed to fetch Outpass details: " + str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Outpass details: " + str(e)}
+
+    description = ""
+    for field in request_data.get("formDetails") or []:
+        if field.get("label") == "Description":
+            description = field.get("value") or ""
+            break
+
+    progress = []
+    for step in request_data.get("progress") or []:
+        handled_by = {}
+        for log in step.get("requestWorkcentreLog") or []:
+            assignee = log.get("assigneeUser")
+            if assignee:
+                handled_by = {
+                    "name": assignee.get("name") or "",
+                    "phone": assignee.get("phone") or "",
+                    "email": assignee.get("email") or ""
+                }
+                break
+        progress.append({
+            "title": step.get("title") or "",
+            "created_on": step.get("createdOn") or "",
+            "action_taken": step.get("actionTaken") or "",
+            "action_type": step.get("actionTakenType") or "",
+            "action_taken_on": step.get("actionTakenOn") or "",
+            "handled_by": handled_by
+        })
+
+    return {"status": "success", "details": {
+        "service": request_data.get("serviceTitle") or "",
+        "request_id": str(request_data.get("requestId") or ""),
+        "created_on": request_data.get("createdOn") or "",
+        "last_updated": request_data.get("lastUpdatedOn") or "",
+        "description": description,
+        "progress": progress
+    }}
 
 
 def get_user_profile(tool_context: ToolContext) -> dict:
     """
-    Gets the user's profile details: name, email, section, department, programme and batch year. Handles authentication automatically.
+    Gets the user's profile details: name, email, section, department, programme and batch year. 
 
     Parameters: None
 
@@ -250,7 +322,7 @@ def get_user_profile(tool_context: ToolContext) -> dict:
 
 def get_terms(tool_context: ToolContext) -> dict:
     """
-    Gets the academic terms for the user's programme and batch, including which term is currently active and term start/end dates. Handles authentication automatically.
+    Gets the academic terms for the user's programme and batch, including which term is currently active and term start/end dates. 
 
     Parameters: None
 
@@ -269,7 +341,7 @@ def get_terms(tool_context: ToolContext) -> dict:
 
 def get_attendance(tool_context: ToolContext) -> dict:
     """
-    Gets the user's attendance for the currently active term, overall and per course. Handles authentication automatically.
+    Gets the user's attendance for the currently active term, overall and per course. 
 
     Parameters: None
 
@@ -322,7 +394,7 @@ def get_attendance(tool_context: ToolContext) -> dict:
 
 def get_mentor_details(tool_context: ToolContext) -> dict:
     """
-    Gets the details of the user's assigned mentor(s). Handles authentication automatically.
+    Gets the details of the user's assigned mentor(s). 
 
     Parameters: None
 
@@ -342,17 +414,8 @@ def get_mentor_details(tool_context: ToolContext) -> dict:
     except requests.RequestException as e:
         return {"status": "error", "message": "Failed to fetch Mentor details: " + str(e)}
 
-    # The endpoint may return a bare JSON array, or an object wrapping the list.
-    # Verify the real shape against the live API and simplify this if you can.
-    if isinstance(mentor_data, dict):
-        mentor_list = mentor_data.get("res") or mentor_data.get("mentors") or []
-    else:
-        mentor_list = mentor_data if isinstance(mentor_data, list) else []
-
     mentors = []
-    for mentor in mentor_list:
-        if not isinstance(mentor, dict):
-            continue
+    for mentor in mentor_data:
         mentors.append({
             "name": mentor.get("name", ""),
             "email": mentor.get("email", ""),

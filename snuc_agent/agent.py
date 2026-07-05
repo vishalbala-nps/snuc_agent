@@ -40,6 +40,7 @@ root_agent = Agent(
     tools=[
         get_digiicampus_posts,
         get_outpass_requests,
+        get_outpass_details,
         get_attendance,
         get_mentor_details
     ]

@@ -1,83 +1,170 @@
-from datetime import *
 import configparser
 import json
+import logging
 import requests
 
 from google.adk.tools import ToolContext
 
+logger = logging.getLogger(__name__)
+
 DIGIICAMPUS_BASE_URL = "https://snuc.digiicampus.com"
 
-def digiicampus_api_get(endpoint: str, token: str, params: dict = None) -> dict:
+#Errors
+class PrerequisiteError(Exception):
+    """Raised when a prerequisite cannot be satisfied.
+
+    The message is final and user-facing: tools return it as-is in an error
+    response, and the agent is instructed to report it without retrying.
+    """
+
+#Helper Functions
+def digiicampus_api_get(endpoint: str, token: str, params: dict = None):
+    logger.info("Digiicampus API GET %s params=%s", DIGIICAMPUS_BASE_URL + endpoint, params)
     response = requests.get(
         DIGIICAMPUS_BASE_URL + endpoint,
         headers={"Auth-Token": token},
         params=params,
         timeout=30
     )
+    logger.info("Digiicampus API GET %s -> HTTP %s", endpoint, response.status_code)
     response.raise_for_status()
     return response.json()
 
-def get_moodle_details(tool_context: ToolContext) -> dict:
-    """
-    Gets the user's Moodle Authentication details
-    
-    Returns:
-    {"status": "success"} -> For Successful fetch of Authentication details
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of Authentication details
-    """
+def _read_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser()
-    files_read = config.read("config.ini")
-    if (not files_read) or (not config.has_section("moodle")):
-        return {"status":"error","message":"Moodle Account Details not configured! Please Configure Account Details in settings and Try Again"}
-    email = config.get("moodle", "email", fallback=None)
-    password = config.get("moodle", "password", fallback=None)
+    if not config.read("config.ini"):
+        raise PrerequisiteError(
+            "Account details are not configured. Tell the user to configure their account details in Settings. Do not retry."
+        )
+    return config
 
-    if (email == None) or (password == None):
-        return {"status":"error","message":"Moodle Account Details not configured! Please Configure Account Details in settings and Try Again"}
-    tool_context.state["MOODLE_EMAIL"] = email
-    tool_context.state["MOODLE_PASSWORD"] = password
-    tool_context.state["MOODLE_DETAILS_SET"] = "True"
-    return {"status":"success"}
 
-def get_digiicampus_details(tool_context: ToolContext) -> dict:
+def _ensure_digiicampus_auth(state) -> str:
+    token = state.get("DIGIICAMPUS_TOKEN")
+    if token:
+        return token
+    config = _read_config()
+    token = config.get("digiicampus", "token", fallback=None) if config.has_section("digiicampus") else None
+    if not token:
+        raise PrerequisiteError(
+            "The Digiicampus account is not configured. Tell the user to "
+            "configure their Digiicampus account details in Settings. Do not retry."
+        )
+    state["DIGIICAMPUS_TOKEN"] = token
+    return token
+
+
+def _ensure_moodle_auth(state) -> tuple:
+    email = state.get("MOODLE_EMAIL")
+    password = state.get("MOODLE_PASSWORD")
+    if email and password:
+        return email, password
+    config = _read_config()
+    email = config.get("moodle", "email", fallback=None) if config.has_section("moodle") else None
+    password = config.get("moodle", "password", fallback=None) if config.has_section("moodle") else None
+    if not email or not password:
+        raise PrerequisiteError(
+            "The Moodle account is not configured. Tell the user to configure "
+            "their Moodle account details in Settings. Do not retry."
+        )
+    state["MOODLE_EMAIL"] = email
+    state["MOODLE_PASSWORD"] = password
+    return email, password
+
+
+def _ensure_user_details(state) -> None:
+    if state.get("DIGIICAMPUS_USER_DETAILS_SET") == "True":
+        return
+    token = _ensure_digiicampus_auth(state)
+    try:
+        auth_details = digiicampus_api_get("/rest/service/authenticationDetails", token)
+    except requests.RequestException as e:
+        raise PrerequisiteError("Failed to fetch Digiicampus user details: " + str(e))
+
+    user = (auth_details.get("res") or {}).get("user")
+    if not user:
+        raise PrerequisiteError(
+            "The Digiicampus token appears to be invalid. Tell the user to "
+            "reconfigure their account details in Settings. Do not retry."
+        )
+
+    state_fields = {
+        "DIGIICAMPUS_NAME": user.get("name"),
+        "DIGIICAMPUS_EMAIL": user.get("email"),
+        "DIGIICAMPUS_SECTION_NAME": user.get("sectionName"),
+        "DIGIICAMPUS_UKID": user.get("ukid"),
+        "DIGIICAMPUS_UNIVERSITY_ID": user.get("universityId"),
+        "DIGIICAMPUS_COLLEGE_ID": user.get("collegeId"),
+        "DIGIICAMPUS_DEPARTMENT_NAME": user.get("departmentName"),
+        "DIGIICAMPUS_PROGRAMME_NAME": user.get("programmeName"),
+        "DIGIICAMPUS_PROGRAMME_ID": user.get("programmeId"),
+        "DIGIICAMPUS_BATCH_YEAR": user.get("batchYear"),
+    }
+    for key, value in state_fields.items():
+        state[key] = "" if value is None else str(value)
+    state["DIGIICAMPUS_USER_DETAILS_SET"] = "True"
+
+
+def _ensure_terms(state) -> str:
+    """Fetches and caches the term list if not already set.
+
+    Returns the active term id, or "" if no term is currently active
+    (which is a valid, final state — not an error).
     """
-    Gets the user's Digiicampus Authentication details
-    
-    Returns:
-    {"status": "success"} -> For Successful fetch of Authentication details
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of Authentication details
-    """
-    config = configparser.ConfigParser()
-    files_read = config.read("config.ini")
-    if (not files_read) or (not config.has_section("digiicampus")):
-        return {"status":"error","message":"Digiicampus Account Details not configured! Please Configure Account Details in settings and Try Again"}
-    token = config.get("digiicampus", "token", fallback=None)
+    if state.get("DIGIICAMPUS_TERMS_SET") == "True":
+        return state.get("DIGIICAMPUS_TERM_ID", "")
+    _ensure_user_details(state)
+    token = state["DIGIICAMPUS_TOKEN"]
+    batch = state["DIGIICAMPUS_BATCH_YEAR"]
+    programme = state["DIGIICAMPUS_PROGRAMME_ID"]
+    try:
+        term_data = digiicampus_api_get(
+            "/rest/terms/programmeBatchTerms", token,
+            params={"batch": batch, "programme": programme}
+        )
+    except requests.RequestException as e:
+        raise PrerequisiteError("Failed to fetch Term details: " + str(e))
 
-    if (token == None):
-        return {"status":"error","message":"Digiicampus Account Details not configured! Please Configure Account Details in settings and Try Again"}
-    tool_context.state["DIGIICAMPUS_TOKEN"] = token
-    tool_context.state["DIGIICAMPUS_DETAILS_SET"] = "True"
-    return {"status":"success"}
+    terms = []
+    active_term_id = ""
+    for term in term_data.get("terms", []):
+        term_id = "" if term.get("id") is None else str(term.get("id"))
+        if term.get("isActive"):
+            active_term_id = term_id
+        terms.append({
+            "term_id": term_id,
+            "starts": term.get("starts", ""),
+            "ends": term.get("ends", ""),
+            "classes_till": term.get("classesTill", ""),
+            "academic_year_start": str(term.get("academicYearStart", "")),
+            "academic_year_end": str(term.get("academicYearEnd", ""))
+        })
+
+    state["DIGIICAMPUS_TERMS_JSON"] = json.dumps(terms)
+    state["DIGIICAMPUS_TERM_ID"] = active_term_id
+    state["DIGIICAMPUS_TERMS_SET"] = "True"
+    return active_term_id
+
+
+#Tools exposed to the LLM
 
 def get_digiicampus_posts(tool_context: ToolContext) -> dict:
     """
-    Gets the latest posts from the user's Digiicampus feed, newest first.
-
-    Precondition: Requires Digiicampus authentication to be set. If absent, use the get_digiicampus_details tool to fetch it first
+    Gets the latest posts from the user's Digiicampus feed, newest first. Handles authentication automatically.
 
     Parameters: None
 
     Returns:
-    {"status": "success", "posts": [{"text": "<POST CONTENT>", "posted_time": "<YYYY-MM-DD HH:MM:SS>", "author": "<AUTHOR NAME>"}, ...]} -> Successful fetch. Empty list if there are no posts.
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of the feed
+    {"status":"success","posts":[{"text":"<POST CONTENT>","posted_time":"<YYYY-MM-DD HH:MM:SS>","author":"<AUTHOR NAME>"}, ...]} -> Successful fetch. Empty list if there are no posts.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
     """
-    token = tool_context.state.get("DIGIICAMPUS_TOKEN")
-    if not token:
-        return {"status":"error","message":"Digiicampus Account Details not set! Please fetch the Digiicampus Account Details first"}
     try:
+        token = _ensure_digiicampus_auth(tool_context.state)
         feed = digiicampus_api_get("/api/feedV3", token, params={"start": 0, "number": 20})
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
     except requests.RequestException as e:
-        return {"status":"error","message":"Failed to fetch Digiicampus feed: " + str(e)}
+        return {"status": "error", "message": "Failed to fetch Digiicampus feed: " + str(e)}
 
     posts = []
     for item in feed.get("res", []):
@@ -94,130 +181,81 @@ def get_digiicampus_posts(tool_context: ToolContext) -> dict:
             "posted_time": post.get("postedTime", ""),
             "author": post.get("postedByName", "")
         })
-    return {"status":"success","posts":posts}
+    return {"status": "success", "posts": posts}
 
-def get_digiicampus_user_details(tool_context: ToolContext) -> dict:
+
+def get_user_profile(tool_context: ToolContext) -> dict:
     """
-    Gets the user's Digiicampus profile details (name, email, section, department, programme, batch year and user id) and stores them in state
-
-    Precondition: Requires Digiicampus authentication to be set. If absent, use the get_digiicampus_details tool to fetch it first
+    Gets the user's profile details: name, email, section, department, programme and batch year. Handles authentication automatically.
 
     Parameters: None
 
     Returns:
-    {"status":"success","user_details":{"name":"<NAME>","email":"<EMAIL>","section":"<SECTION>","department":"<DEPARTMENT>","programme":"<PROGRAMME>","batch_year":"<YYYY>","ukid":"<USER ID>"}} -> For Successful fetch of the user details
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of the user details
+    {"status":"success","user_details":{"name":"<NAME>","email":"<EMAIL>","section":"<SECTION>","department":"<DEPARTMENT>","programme":"<PROGRAMME>","batch_year":"<YYYY>"}} -> Successful fetch.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
     """
-    token = tool_context.state.get("DIGIICAMPUS_TOKEN")
-    if not token:
-        return {"status":"error","message":"Digiicampus Account Details not set! Please fetch the Digiicampus Account Details first"}
     try:
-        auth_details = digiicampus_api_get("/rest/service/authenticationDetails", token)
-    except requests.RequestException as e:
-        return {"status":"error","message":"Failed to fetch Digiicampus user details: " + str(e)}
+        _ensure_user_details(tool_context.state)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
 
-    user = (auth_details.get("res") or {}).get("user")
-    if not user:
-        return {"status":"error","message":"Digiicampus did not return user details! Please check your account details in settings"}
-
-    state_fields = {
-        "DIGIICAMPUS_NAME": user.get("name"),
-        "DIGIICAMPUS_EMAIL": user.get("email"),
-        "DIGIICAMPUS_SECTION_NAME": user.get("sectionName"),
-        "DIGIICAMPUS_UKID": user.get("ukid"),
-        "DIGIICAMPUS_UNIVERSITY_ID": user.get("universityId"),
-        "DIGIICAMPUS_COLLEGE_ID": user.get("collegeId"),
-        "DIGIICAMPUS_DEPARTMENT_NAME": user.get("departmentName"),
-        "DIGIICAMPUS_PROGRAMME_NAME": user.get("programmeName"),
-        "DIGIICAMPUS_PROGRAMME_ID": user.get("programmeId"),
-        "DIGIICAMPUS_BATCH_YEAR": user.get("batchYear"),
-    }
-    for key, value in state_fields.items():
-        tool_context.state[key] = "" if value is None else str(value)
-    tool_context.state["DIGIICAMPUS_USER_DETAILS_SET"] = "True"
-
-    return {"status":"success","user_details":{
-        "name": tool_context.state["DIGIICAMPUS_NAME"],
-        "email": tool_context.state["DIGIICAMPUS_EMAIL"],
-        "section": tool_context.state["DIGIICAMPUS_SECTION_NAME"],
-        "department": tool_context.state["DIGIICAMPUS_DEPARTMENT_NAME"],
-        "programme": tool_context.state["DIGIICAMPUS_PROGRAMME_NAME"],
-        "batch_year": tool_context.state["DIGIICAMPUS_BATCH_YEAR"],
+    state = tool_context.state
+    return {"status": "success", "user_details": {
+        "name": state["DIGIICAMPUS_NAME"],
+        "email": state["DIGIICAMPUS_EMAIL"],
+        "section": state["DIGIICAMPUS_SECTION_NAME"],
+        "department": state["DIGIICAMPUS_DEPARTMENT_NAME"],
+        "programme": state["DIGIICAMPUS_PROGRAMME_NAME"],
+        "batch_year": state["DIGIICAMPUS_BATCH_YEAR"],
     }}
 
-def get_active_term(tool_context: ToolContext) -> dict:
-    """
-    Gets the academic terms for the user's programme and batch, and stores the currently active term id in state
 
-    Precondition:
-    - Requires Digiicampus authentication to be set. If absent, use the get_digiicampus_details tool to fetch it first
-    - Requires Digiicampus user details to be set. If absent, use the get_digiicampus_user_details tool to fetch them first
+def get_terms(tool_context: ToolContext) -> dict:
+    """
+    Gets the academic terms for the user's programme and batch, including which term is currently active and term start/end dates. Handles authentication automatically.
 
     Parameters: None
 
     Returns:
-    {"status":"success","active_term_id":"<TERM ID>","terms":[{"term_id":"<TERM ID>","starts":"<YYYY-MM-DD>","ends":"<YYYY-MM-DD>","classes_till":"<YYYY-MM-DD>","academic_year_start":"<YYYY>","academic_year_end":"<YYYY>"}, ...]} -> For Successful fetch of the terms. active_term_id is "" if no term is currently active.
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of the terms
+    {"status":"success","active_term_id":"<TERM ID>","terms":[{"term_id":"<TERM ID>","starts":"<YYYY-MM-DD>","ends":"<YYYY-MM-DD>","classes_till":"<YYYY-MM-DD>","academic_year_start":"<YYYY>","academic_year_end":"<YYYY>"}, ...]} -> Successful fetch. active_term_id is "" if no term is currently active.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
     """
-    token = tool_context.state.get("DIGIICAMPUS_TOKEN")
-    if not token:
-        return {"status":"error","message":"Digiicampus Account Details not set! Please fetch the Digiicampus Account Details first"}
-    batch = tool_context.state.get("DIGIICAMPUS_BATCH_YEAR")
-    programme = tool_context.state.get("DIGIICAMPUS_PROGRAMME_ID")
-    if (not batch) or (not programme):
-        return {"status":"error","message":"Digiicampus User Details not set! Please fetch the Digiicampus user details first using the get_digiicampus_user_details tool"}
     try:
-        term_data = digiicampus_api_get("/rest/terms/programmeBatchTerms", token, params={"batch": batch, "programme": programme})
-    except requests.RequestException as e:
-        return {"status":"error","message":"Failed to fetch Term details: " + str(e)}
+        active_term_id = _ensure_terms(tool_context.state)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
 
-    terms = []
-    active_term_id = ""
-    for term in term_data.get("terms", []):
-        term_id = "" if term.get("id") is None else str(term.get("id"))
-        if term.get("isActive"):
-            active_term_id = term_id
-        terms.append({
-            "term_id": term_id,
-            "starts": term.get("starts", ""),
-            "ends": term.get("ends", ""),
-            "classes_till": term.get("classesTill", ""),
-            "academic_year_start": str(term.get("academicYearStart", "")),
-            "academic_year_end": str(term.get("academicYearEnd", ""))
-        })
-    if active_term_id:
-        tool_context.state["DIGIICAMPUS_TERM_ID"] = active_term_id
-        tool_context.state["DIGIICAMPUS_TERM_ID_SET"] = "True"
-    return {"status":"success","active_term_id":active_term_id,"terms":terms}
+    terms = json.loads(tool_context.state.get("DIGIICAMPUS_TERMS_JSON", "[]"))
+    return {"status": "success", "active_term_id": active_term_id, "terms": terms}
+
 
 def get_attendance(tool_context: ToolContext) -> dict:
     """
-    Gets the user's attendance for the currently active term, overall and per course
-
-    Precondition:
-    - Requires Digiicampus authentication to be set. If absent, use the get_digiicampus_details tool to fetch it first
-    - Requires Digiicampus user details to be set. If absent, use the get_digiicampus_user_details tool to fetch them first
-    - Requires the active term to be set. If absent, use the get_active_term tool to fetch it first
+    Gets the user's attendance for the currently active term, overall and per course. Handles authentication automatically.
 
     Parameters: None
 
     Returns:
-    {"status":"success","overall":{"present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>,"approved_leaves":<N>,"unapproved_leaves":<N>},"courses":[{"course":"<COURSE NAME>","course_code":"<COURSE CODE>","present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>}, ...]} -> For Successful fetch of attendance
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of attendance
+    {"status":"success","overall":{"present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>,"approved_leaves":<N>,"unapproved_leaves":<N>},"courses":[{"course":"<COURSE NAME>","course_code":"<COURSE CODE>","present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>}, ...]} -> Successful fetch.
+    {"status":"unavailable","message":"<MESSAGE>"} -> No active term exists, so attendance cannot be fetched. Final. Report to the user; do NOT retry.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
     """
-    token = tool_context.state.get("DIGIICAMPUS_TOKEN")
-    if not token:
-        return {"status":"error","message":"Digiicampus Account Details not set! Please fetch the Digiicampus Account Details first"}
-    ukid = tool_context.state.get("DIGIICAMPUS_UKID")
-    if not ukid:
-        return {"status":"error","message":"Digiicampus User Details not set! Please fetch the Digiicampus user details first using the get_digiicampus_user_details tool"}
-    term_id = tool_context.state.get("DIGIICAMPUS_TERM_ID")
-    if not term_id:
-        return {"status":"error","message":"Active term not set! Please fetch the active term first using the get_active_term tool"}
+    state = tool_context.state
     try:
-        attendance = digiicampus_api_get("/api/attendance/student/" + str(ukid) + "/term/" + str(term_id), token)
+        term_id = _ensure_terms(state)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+
+    if not term_id:
+        return {"status": "unavailable", "message": "No term is currently active, so attendance is unavailable. Report this to the user; do NOT retry."}
+
+    try:
+        attendance = digiicampus_api_get(
+            "/api/attendance/student/" + str(state["DIGIICAMPUS_UKID"]) + "/term/" + str(term_id),
+            state["DIGIICAMPUS_TOKEN"]
+        )
     except requests.RequestException as e:
-        return {"status":"error","message":"Failed to fetch Attendance details: " + str(e)}
+        return {"status": "error", "message": "Failed to fetch Attendance details: " + str(e)}
 
     overall = {
         "present": attendance.get("totalPresent", 0),
@@ -241,39 +279,45 @@ def get_attendance(tool_context: ToolContext) -> dict:
             "total_classes": course.get("totalClasses", 0),
             "percentage": round(course.get("percentage") or 0, 2)
         })
-    return {"status":"success","overall":overall,"courses":courses}
+    return {"status": "success", "overall": overall, "courses": courses}
+
 
 def get_mentor_details(tool_context: ToolContext) -> dict:
     """
-    Gets the details of the user's assigned mentor(s)
-
-    Precondition: 
-    - Requires Digiicampus authentication to be set. If absent, use the get_digiicampus_details tool to fetch it first
-    - Requires Digiicampus user id to be set. If absent, use the get_digiicampus_user_details tool to fetch it first
+    Gets the details of the user's assigned mentor(s). Handles authentication automatically.
 
     Parameters: None
 
     Returns:
-    {"status":"success","mentors":[{"name":"<MENTOR NAME>","email":"<MENTOR EMAIL>","phone":"<MENTOR PHONE>"}, ...]} -> For Successful fetch of mentor details. Empty list if no mentor is assigned.
-    {"status":"error","message":"<ERROR MESSAGE>"} -> For unsuccessful fetch of mentor details
+    {"status":"success","mentors":[{"name":"<MENTOR NAME>","email":"<MENTOR EMAIL>","phone":"<MENTOR PHONE>"}, ...]} -> Successful fetch. Empty list if no mentor is assigned.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
     """
-    token = tool_context.state.get("DIGIICAMPUS_TOKEN")
-    ukid = tool_context.state.get("DIGIICAMPUS_UKID")
-    if not ukid:
-        return {"status":"error","message":"Digiicampus User ID not set! Please fetch the Digiicampus user details first using the get_digiicampus_user_details tool"}
-    if not token:
-        return {"status":"error","message":"Digiicampus Account Details not set! Please fetch the Digiicampus Account Details first"}
+    state = tool_context.state
     try:
-        mentor_list = digiicampus_api_get("/api/mentorManagement/mentee/mentor/"+str(ukid), token)
+        _ensure_user_details(state)
+        mentor_data = digiicampus_api_get(
+            "/api/mentorManagement/mentee/mentor/" + str(state["DIGIICAMPUS_UKID"]),
+            state["DIGIICAMPUS_TOKEN"]
+        )
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
     except requests.RequestException as e:
-        return {"status":"error","message":"Failed to fetch Mentor details: " + str(e)}
+        return {"status": "error", "message": "Failed to fetch Mentor details: " + str(e)}
+
+    # The endpoint may return a bare JSON array, or an object wrapping the list.
+    # Verify the real shape against the live API and simplify this if you can.
+    if isinstance(mentor_data, dict):
+        mentor_list = mentor_data.get("res") or mentor_data.get("mentors") or []
+    else:
+        mentor_list = mentor_data if isinstance(mentor_data, list) else []
 
     mentors = []
     for mentor in mentor_list:
+        if not isinstance(mentor, dict):
+            continue
         mentors.append({
             "name": mentor.get("name", ""),
             "email": mentor.get("email", ""),
             "phone": mentor.get("phone", "")
         })
-    return {"status":"success","mentors":mentors}
-
+    return {"status": "success", "mentors": mentors}

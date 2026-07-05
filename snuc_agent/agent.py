@@ -42,6 +42,7 @@ root_agent = Agent(
         get_outpass_requests,
         get_outpass_details,
         get_attendance,
-        get_mentor_details
+        get_mentor_details,
+        get_digiicampus_courses
     ]
 )

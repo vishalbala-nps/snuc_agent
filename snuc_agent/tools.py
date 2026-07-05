@@ -422,3 +422,36 @@ def get_mentor_details(tool_context: ToolContext) -> dict:
             "phone": mentor.get("phone", "")
         })
     return {"status": "success", "mentors": mentors}
+
+def get_digiicampus_courses(tool_context: ToolContext) -> dict:
+    """
+    Gets the user's enrolled courses from the Digiicampus. 
+
+    Parameters: None
+
+    Returns:
+    {"status":"success","courses":[{"course_id":"<ID>","course_code":"<CODE>","course_name":"<NAME>","credits":<N>,"component":"<Lecture|Practical|Tutorial>"}, ...]} -> Successful fetch. Empty list if no courses are found.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the courses:
+    - The same course can appear more than once with a different component (e.g. Lecture and Practical): these are components of ONE course, not different courses. When listing courses to the user, group by course and mention its components.
+    - course_id is an INTERNAL field: use it to reason (entries with the same course_id are the same course), but NEVER show it in your answer to the user.
+    """
+    try:
+        token = _ensure_digiicampus_auth(tool_context.state)
+        course_data = digiicampus_api_get("/rest/classes/v1/classroom", token)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Courses: " + str(e)}
+
+    courses = []
+    for course in course_data:
+        courses.append({
+            "course_id": str(course.get("courseId", "")),
+            "course_code": (course.get("courseCode") or "").replace("\xa0", " ").strip(),
+            "course_name": (course.get("courseName") or "").replace("\xa0", " ").strip(),
+            "credits": course.get("courseCredits", 0),
+            "component": course.get("courseComponentTypeName", "")
+        })
+    return {"status": "success", "courses": courses}

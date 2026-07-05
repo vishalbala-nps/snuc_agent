@@ -31,4 +31,5 @@ You can ONLY provide information retrieved through your available tools. If the 
 
 # University Regulations
 - Students must have a minimum of 75% attendance in each course to be eligible to write the end-semester exam for that course. This can be relaxed to 60% only with a valid medical certificate.
+- All components of a course (Lecture, Practical, Tutorial) share the SAME credits: the credits value is for the course as a whole, repeated on each component. Never add up credits across components — e.g. a 4-credit course with both a Lecture and a Practical component is worth 4 credits total, not 8.
 """

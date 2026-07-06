@@ -191,7 +191,7 @@ def get_outpass_requests(tool_context: ToolContext) -> dict:
     Parameters: None
 
     Returns:
-    {"status":"success","requests":[{"request_id":"<ID>","service":"<SERVICE TITLE>","request_status":"<ongoing|closed>","action_taken":"<ACTION TAKEN>","action_type":"<positive|negative>","last_updated":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch. Empty list if there are no outpass requests.
+    {"status":"success","requests":[{"request_ref":"<REF>","service":"<SERVICE TITLE>","request_status":"<ongoing|closed>","action_taken":"<ACTION TAKEN>","action_type":"<positive|negative>","last_updated":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch. Empty list if there are no outpass requests.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
     Notes on interpreting a request:
@@ -199,7 +199,7 @@ def get_outpass_requests(tool_context: ToolContext) -> dict:
     - request_status "ongoing" means the request is still being processed; "closed" means it has been completed.
     - action_taken is the latest action taken on the request (e.g. "Approved").
     - action_type is the meaning of that action for the user: "positive" means a favourable outcome (e.g. the outpass was approved/granted), "negative" means an unfavourable outcome (e.g. the outpass was rejected/denied).
-    - request_id and action_type are INTERNAL fields: use them to reason about the requests, but NEVER show them in your answer to the user. Describe each request in plain language using service, request_status, action_taken and the meaning of action_type (e.g. "Day Scholar Pass — closed, approved").
+    - action_type is INTERNAL: use it to reason, never show it. Present each request in plain language as: "<service> — <request_status>, <outcome in words> (updated <date in words>)", e.g. "Day Scholar Pass — closed, approved (updated 6th May 2026)".
     """
     try:
         token = _ensure_digiicampus_auth(tool_context.state)
@@ -212,7 +212,7 @@ def get_outpass_requests(tool_context: ToolContext) -> dict:
     outpass_requests = []
     for request in request_data.get("requests", []):
         outpass_requests.append({
-            "request_id": str(request.get("requestId", "")),
+            "request_ref": str(request.get("requestId", "")),
             "service": request.get("serviceTitle", ""),
             "request_status": request.get("requestStatus", ""),
             "action_taken": request.get("actionTakenName", ""),
@@ -226,16 +226,16 @@ def get_outpass_requests(tool_context: ToolContext) -> dict:
     return {"status": "success", "requests": outpass_requests}
 
 
-def get_outpass_details(request_id: str, tool_context: ToolContext) -> dict:
+def get_outpass_details(request_ref: str, tool_context: ToolContext) -> dict:
     """
-    Gets the full details of a single outpass request, including its reason and approval progress. 
+    Gets the full details of a single outpass request, including its reason and approval progress.
 
     Parameters:
-    request_id: The id of the outpass request, as returned by the get_outpass_requests tool.
+    request_ref: The request_ref of the outpass request, as returned by the get_outpass_requests tool.
 
     Returns:
-    {"status":"success","details":{"service":"<SERVICE TITLE>","request_id":"<ID>","created_on":"<YYYY-MM-DD HH:MM:SS>","last_updated":"<YYYY-MM-DD HH:MM:SS>","description":"<REASON GIVEN BY THE USER>","progress":[{"title":"<STEP>","created_on":"<YYYY-MM-DD HH:MM:SS>","action_taken":"<ACTION>","action_type":"<positive|negative>","action_taken_on":"<YYYY-MM-DD HH:MM:SS>","handled_by":{"name":"<NAME>","phone":"<PHONE>","email":"<EMAIL>"}}, ...]}} -> Successful fetch.
-    {"status":"error","message":"No outpass request exists with request_id <ID>. Use a request_id returned by the get_outpass_requests tool."} -> The given request_id does not exist. You may call get_outpass_requests to find the correct id and retry ONCE with it.
+    {"status":"success","details":{"service":"<SERVICE TITLE>","created_on":"<YYYY-MM-DD HH:MM:SS>","last_updated":"<YYYY-MM-DD HH:MM:SS>","description":"<REASON GIVEN BY THE USER>","progress":[{"title":"<STEP>","created_on":"<YYYY-MM-DD HH:MM:SS>","action_taken":"<ACTION>","action_type":"<positive|negative>","action_taken_on":"<YYYY-MM-DD HH:MM:SS>","handled_by":{"name":"<NAME>","phone":"<PHONE>","email":"<EMAIL>"}}, ...]}} -> Successful fetch.
+    {"status":"error","message":"No outpass request exists with that request_ref. Use a request_ref returned by the get_outpass_requests tool."} -> The given request_ref does not exist. You may call get_outpass_requests to find the correct request_ref and retry ONCE with it.
     {"status":"error","message":"<OTHER ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
     Notes on interpreting the details:
@@ -243,16 +243,16 @@ def get_outpass_details(request_id: str, tool_context: ToolContext) -> dict:
     - progress lists the approval steps in order. The first step (title "Created") is the submission of the request itself, so its action_taken, action_type, action_taken_on and handled_by are empty.
     - For the other steps, action_taken is what the handler did, action_type is its meaning ("positive" = favourable, "negative" = unfavourable), action_taken_on is when, and handled_by is the person who handled that step.
     - For "Day Scholar Pass" requests, the approval stages mean: "Working day outpass_Parent" = approval by the student's PARENT; "Working day outpass_Admin" = approval by the student's MENTOR. Refer to the stages as "parent approval" / "mentor approval" when answering.
-    - request_id, action_type and the raw stage titles are INTERNAL fields: use them to reason, but NEVER show them in your answer to the user.
+    - action_type and the raw stage titles are INTERNAL: use them to reason, but NEVER show them in your answer to the user.
     """
     try:
         token = _ensure_digiicampus_auth(tool_context.state)
-        request_data = digiicampus_api_get("/rest/campusHelpCentre/requests/" + str(request_id) + "/v3", token)
+        request_data = digiicampus_api_get("/rest/campusHelpCentre/requests/" + str(request_ref) + "/v3", token)
     except PrerequisiteError as e:
         return {"status": "error", "message": str(e)}
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-            return {"status": "error", "message": "No outpass request exists with request_id " + str(request_id) + ". Use a request_id returned by the get_outpass_requests tool."}
+            return {"status": "error", "message": "No outpass request exists with that request_ref. Use a request_ref returned by the get_outpass_requests tool."}
         return {"status": "error", "message": "Failed to fetch Outpass details: " + str(e)}
     except requests.RequestException as e:
         return {"status": "error", "message": "Failed to fetch Outpass details: " + str(e)}
@@ -286,7 +286,6 @@ def get_outpass_details(request_id: str, tool_context: ToolContext) -> dict:
 
     return {"status": "success", "details": {
         "service": request_data.get("serviceTitle") or "",
-        "request_id": str(request_data.get("requestId") or ""),
         "created_on": request_data.get("createdOn") or "",
         "last_updated": request_data.get("lastUpdatedOn") or "",
         "description": description,
@@ -430,12 +429,14 @@ def get_digiicampus_courses(tool_context: ToolContext) -> dict:
     Parameters: None
 
     Returns:
-    {"status":"success","courses":[{"course_id":"<ID>","course_code":"<CODE>","course_name":"<NAME>","credits":<N>,"component":"<Lecture|Practical|Tutorial>"}, ...]} -> Successful fetch. Empty list if no courses are found.
+    {"status":"success","courses":[{"course_ref":"<REF>","class_ref":"<REF>","course_code":"<CODE>","course_name":"<NAME>","credits":<N>,"component":"<Lecture|Practical|Tutorial>"}, ...]} -> Successful fetch. Empty list if no courses are found.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
     Notes on interpreting the courses:
-    - The same course can appear more than once with a different component (e.g. Lecture and Practical): these are components of ONE course, not different courses. When listing courses to the user, group by course and mention its components.
-    - course_id is an INTERNAL field: use it to reason (entries with the same course_id are the same course), but NEVER show it in your answer to the user.
+    - The same course can appear more than once with a different component (e.g. Lecture and Practical): these are components of ONE course, not different courses (entries with the same course_ref are the same course).
+    - All components of a course share the SAME credits: the credits value is for the course as a whole, repeated on each component entry. Never add up credits across components — e.g. a course listed with 4 credits as both Lecture and Practical is worth 4 credits total, not 8.
+    - Present each course grouped, as: "<course_name> (<course_code>) — <credits> credits, <components>", e.g. "Data Structures + Lab (CS1736) — 4 credits, Lecture and Practical".
+    - After listing the courses, end your answer by offering to show the modules of any course.
     """
     try:
         token = _ensure_digiicampus_auth(tool_context.state)
@@ -448,10 +449,43 @@ def get_digiicampus_courses(tool_context: ToolContext) -> dict:
     courses = []
     for course in course_data:
         courses.append({
-            "course_id": str(course.get("courseId", "")),
+            "course_ref": str(course.get("courseId", "")),
+            "class_ref": str(course.get("id", "")),
             "course_code": (course.get("courseCode") or "").replace("\xa0", " ").strip(),
             "course_name": (course.get("courseName") or "").replace("\xa0", " ").strip(),
             "credits": course.get("courseCredits", 0),
             "component": course.get("courseComponentTypeName", "")
         })
     return {"status": "success", "courses": courses}
+
+
+def get_digiicampus_course_modules(class_ref: str, tool_context: ToolContext) -> dict:
+    """
+    Gets the modules of one course component.
+
+    Parameters:
+    class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool. Content is per component: a course's Lecture and Practical components have different class_refs and different content.
+
+    Returns:
+    {"status":"success","modules":[{"module_ref":"<REF>","module":"<e.g. UNIT 1>","title":"<MODULE TITLE>","description":"<SYLLABUS OF THE MODULE>"}, ...]} -> Successful fetch. Empty list if the course has no content yet.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+    
+    """
+    try:
+        token = _ensure_digiicampus_auth(tool_context.state)
+        module_data = digiicampus_api_get("/rest/classroomV2/class/" + str(class_ref) + "/module", token)
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Course modules: " + str(e)}
+
+    modules = []
+    for entry in module_data:
+        module = entry.get("module") or {}
+        modules.append({
+            "module_ref": str(module.get("id", "")),
+            "module": module.get("module") or "",
+            "title": module.get("title") or "",
+            "description": module.get("description") or ""
+        })
+    return {"status": "success", "modules": modules}

@@ -36,14 +36,12 @@ export function Sidebar({
   onNew,
   onSelect,
   onDelete,
-  onSaveToken
 }: {
   sessions: AdkSessionSummary[]
   activeId: string | null
   onNew: () => void
   onSelect: (id: string) => void
   onDelete: (id: string) => void
-  onSaveToken: (token: string) => Promise<void>
 }): React.JSX.Element {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
@@ -89,7 +87,7 @@ export function Sidebar({
         </div>
       </ScrollArea>
       <div className="border-t p-2">
-        <SettingsDialog onSaveToken={onSaveToken} />
+        <SettingsDialog />
       </div>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(o) => !o && setPendingDelete(null)}>

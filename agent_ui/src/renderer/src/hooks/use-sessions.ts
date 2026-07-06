@@ -19,7 +19,7 @@ export function useSessions(): {
       list.sort((a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0))
       setSessions(list)
     } catch (e) {
-      toast.error((e as Error).message)
+      if ((e as Error).name !== 'BackendDownError') toast.error((e as Error).message)
     }
   }, [])
 
@@ -36,7 +36,7 @@ export function useSessions(): {
         removeTitle(sessionId)
         await refresh()
       } catch (e) {
-        toast.error((e as Error).message)
+        if ((e as Error).name !== 'BackendDownError') toast.error((e as Error).message)
       }
     },
     [refresh]

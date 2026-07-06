@@ -32,7 +32,7 @@ export function useChat(): {
       const session = await getSession(sessionId)
       setMessages(eventsToMessages(session.events ?? []))
     } catch (e) {
-      toast.error((e as Error).message)
+      if ((e as Error).name !== 'BackendDownError') toast.error((e as Error).message)
       setMessages([])
     } finally {
       setLoading(false)
@@ -67,7 +67,8 @@ export function useChat(): {
       )
     } catch (e) {
       const err = e as Error
-      if (err.name !== 'AbortError') toast.error(err.message)
+      // BackendDownError is surfaced by the app-level retry dialog instead.
+      if (err.name !== 'AbortError' && err.name !== 'BackendDownError') toast.error(err.message)
     } finally {
       abortRef.current = null
       setStreaming(false)

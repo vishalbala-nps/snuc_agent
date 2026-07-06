@@ -432,8 +432,7 @@ def get_digiicampus_courses(tool_context: ToolContext) -> dict:
     {"status":"success","courses":[{"course_ref":"<REF>","class_ref":"<REF>","course_code":"<CODE>","course_name":"<NAME>","credits":<N>,"component":"<Lecture|Practical|Tutorial>"}, ...]} -> Successful fetch. Empty list if no courses are found.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
-    Notes on interpreting the courses:
-    - The same course can appear more than once with a different component (e.g. Lecture and Practical): these are components of ONE course, not different courses (entries with the same course_ref are the same course).
+    Notes on interpreting the courses:    
     - All components of a course share the SAME credits: the credits value is for the course as a whole, repeated on each component entry. Never add up credits across components — e.g. a course listed with 4 credits as both Lecture and Practical is worth 4 credits total, not 8.
     - Present each course grouped, as: "<course_name> (<course_code>) — <credits> credits, <components>", e.g. "Data Structures + Lab (CS1736) — 4 credits, Lecture and Practical".
     - After listing the courses, end your answer by offering to show the modules of any course.
@@ -490,21 +489,21 @@ def get_digiicampus_course_modules(class_ref: str, tool_context: ToolContext) ->
         })
     return {"status": "success", "modules": modules}
 
-def get_digiicampus_course_content(class_ref: str, tool_context: ToolContext) -> dict:
+def get_digiicampus_course_module_content(class_ref: str, module_ref: str, tool_context: ToolContext) -> dict:
     """
-    Gets the downloadable course content (files shared for each session), grouped by syllabus unit, of one course component.
+    Gets the downloadable course content (files shared for each session) of ONE module of a course component.
 
     Parameters:
     class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool.
+    module_ref: The module_ref of the module, as returned by the get_digiicampus_course_modules tool for the same class_ref.
 
     Returns:
-    {"status":"success","content":{"<UNIT NAME>":{"unitDescription":"<UNIT TITLE>","sessions":[{"session_name":"<SESSION NAME>","media_ref":"<REF>","media_name":"<FILE NAME>","created_on":"<YYYY-MM-DD HH:MM:SS>"}, ...]}, ...}} -> Successful fetch. Empty object if the course has no content yet.
+    {"status":"success","sessions":[{"session_name":"<SESSION NAME>","media_ref":"<REF>","media_name":"<FILE NAME>","created_on":"<YYYY-MM-DD HH:MM:SS>"}, ...]} -> Successful fetch, in session order. Empty list if the module has no content yet.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
 
     Notes on interpreting the content:
-    - Each unit maps to its list of sessions in the order they were taught; each session entry is one shared file.
-    - Present a session's file by its media_name and created_on date. The actual download link is stored internally, keyed by media_ref — you never see or output the URL itself.
-    - By default, give a short per-unit summary only: "<UNIT NAME> (<unitDescription>) — <N> files", then offer to list the files of a specific unit. Only list individual sessions/files for the unit(s) the user actually asked about, and only the session_name, media_name and date — never all units at once unless the user explicitly asks for everything.
+    - Present each session's file by its session_name, media_name and created_on date. The actual download link is stored internally, keyed by media_ref — you never see or output the URL itself.
+
     """
     state = tool_context.state
     try:
@@ -516,27 +515,27 @@ def get_digiicampus_course_content(class_ref: str, tool_context: ToolContext) ->
         return {"status": "error", "message": "Failed to fetch Course content: " + str(e)}
 
     # Keep the huge presigned URLs out of the LLM context: store them in state
-    # keyed by media_ref, so a download tool can look them up later.
+    # keyed by media_ref, so a download tool can look them up later. The API
+    # returns the whole course, so cache every URL, but only report the
+    # requested module's sessions to the LLM.
     media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
 
-    content = {}
+    sessions = []
     for resource in sorted(resource_data, key=lambda r: (r.get("moduleOrder") or 0, r.get("sessionOrder") or 0)):
         media_ref = str(resource.get("mediaId", ""))
         if resource.get("mediaUrl"):
             media_urls[media_ref] = resource["mediaUrl"]
-        unit = content.setdefault(resource.get("moduleName") or "", {
-            "unitDescription": resource.get("moduleTitle") or "",
-            "sessions": []
-        })
-        unit["sessions"].append({
-            "session_name": resource.get("sessionName") or "",
+        if str(resource.get("moduleId", "")) != str(module_ref):
+            continue
+        sessions.append({
+            "session_name": (resource.get("sessionName") or "").replace("\xa0", " ").strip(),
             "media_ref": media_ref,
-            "media_name": resource.get("mediaName") or "",
+            "media_name": (resource.get("mediaName") or "").replace("\xa0", " ").strip(),
             "created_on": resource.get("createdTimestamp") or ""
         })
 
     state["DIGIICAMPUS_MEDIA_URLS_JSON"] = json.dumps(media_urls)
-    return {"status": "success", "content": content}
+    return {"status": "success", "sessions": sessions}
 
 
 def fetch_download_url(media_ref: str, tool_context: ToolContext) -> dict:
@@ -544,16 +543,56 @@ def fetch_download_url(media_ref: str, tool_context: ToolContext) -> dict:
     Prepares the download of one course content file. The download itself is handled by the app UI — you only need to call this tool and confirm to the user.
 
     Parameters:
-    media_ref: The media_ref of the file, as returned by the get_digiicampus_course_content tool.
+    media_ref: The media_ref of the file, as returned by the get_digiicampus_course_module_content tool.
 
     Returns:
     {"status":"success","message":"Download prepared."} -> The download was prepared; tell the user the file's download is starting.
-    {"status":"error","message":"Unknown media_ref. Call the get_digiicampus_course_content tool for the course first, then retry ONCE with a media_ref it returned."} -> The given media_ref is not known. Follow the message.
+    {"status":"error","message":"Unknown media_ref. Call the get_digiicampus_course_module_content tool for the file's module first, then retry ONCE with a media_ref it returned."} -> The given media_ref is not known. Follow the message.
     """
     state = tool_context.state
     media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
     url = media_urls.get(str(media_ref))
     if not url:
-        return {"status": "error", "message": "Unknown media_ref. Call the get_digiicampus_course_content tool for the course first, then retry ONCE with a media_ref it returned."}
+        return {"status": "error", "message": "Unknown media_ref. Call the get_digiicampus_course_module_content tool for the file's module first, then retry ONCE with a media_ref it returned."}
     state["DOWNLOAD_URL"] = url
     return {"status": "success", "message": "Download prepared."}
+
+
+def get_digiicampus_assignments(class_ref: str, tool_context: ToolContext) -> dict:
+    """
+    Gets the assignments of one course component, split into previous (already started) and upcoming (not yet started) assignments.
+
+    Parameters:
+    class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool.
+
+    Returns:
+    {"status":"success","previous_assignments":[{"assignment_ref":"<REF>","name":"<ASSIGNMENT NAME>","start_date":"<YYYY-MM-DD HH:MM:SS>","due_date":"<YYYY-MM-DD HH:MM:SS>","is_submitted":<true|false>}, ...],"upcoming_assignments":[...same shape...]} -> Successful fetch. is_submitted tells whether the user has submitted that assignment. Empty lists if there are no assignments.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+    """
+    state = tool_context.state
+    try:
+        _ensure_user_details(state)
+        assignment_data = digiicampus_api_get(
+            "/rest/classes/" + str(class_ref) + "/users/" + state["DIGIICAMPUS_UKID"] + "/assignments",
+            state["DIGIICAMPUS_TOKEN"]
+        )
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Assignments: " + str(e)}
+
+    def trim(assignments):
+        return [{
+            "assignment_ref": str(a.get("id", "")),
+            "name": a.get("name") or "",
+            "start_date": a.get("startDate") or "",
+            "due_date": a.get("dueDate") or "",
+            "is_submitted": bool(a.get("isSubmitted"))
+        } for a in assignments or []]
+
+    res = assignment_data.get("res") or {}
+    return {
+        "status": "success",
+        "previous_assignments": trim(res.get("previousAssignments")),
+        "upcoming_assignments": trim(res.get("upcomingAssignments"))
+    }

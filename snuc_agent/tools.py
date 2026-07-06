@@ -548,6 +548,7 @@ def fetch_download_url(media_ref: str, tool_context: ToolContext) -> dict:
     Returns:
     {"status":"success","message":"Download prepared."} -> The download was prepared; tell the user the file's download is starting.
     {"status":"error","message":"Unknown media_ref. Call the get_digiicampus_course_module_content tool for the file's module first, then retry ONCE with a media_ref it returned."} -> The given media_ref is not known. Follow the message.
+    
     """
     state = tool_context.state
     media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
@@ -566,8 +567,13 @@ def get_digiicampus_assignments(class_ref: str, tool_context: ToolContext) -> di
     class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool.
 
     Returns:
-    {"status":"success","previous_assignments":[{"assignment_ref":"<REF>","name":"<ASSIGNMENT NAME>","start_date":"<YYYY-MM-DD HH:MM:SS>","due_date":"<YYYY-MM-DD HH:MM:SS>","is_submitted":<true|false>}, ...],"upcoming_assignments":[...same shape...]} -> Successful fetch. is_submitted tells whether the user has submitted that assignment. Empty lists if there are no assignments.
+    {"status":"success","previous_assignments":[{"assignment_ref":"<REF>","name":"<ASSIGNMENT NAME>","start_date":"<YYYY-MM-DD HH:MM:SS>","due_date":"<YYYY-MM-DD HH:MM:SS>","isSubmitted":<true|false>,"dueDatePassed":<true|false>}, ...],"upcoming_assignments":[...same shape...]} -> Successful fetch. isSubmitted tells whether the user has submitted that assignment. Empty lists if there are no assignments.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the content:
+    - Present each assignment with its name, start_date, and due_date.
+    - If isSubmitted is true -> the assignment has already been submitted.
+    - If dueDatePassed is true -> the assignment is overdue and can no longer be submitted.
     """
     state = tool_context.state
     try:
@@ -587,7 +593,10 @@ def get_digiicampus_assignments(class_ref: str, tool_context: ToolContext) -> di
             "name": a.get("name") or "",
             "start_date": a.get("startDate") or "",
             "due_date": a.get("dueDate") or "",
-            "is_submitted": bool(a.get("isSubmitted"))
+            "isSubmitted": bool(a.get("isSubmitted")),
+            "dueDatePassed": bool(a.get("dueDatePassed")),
+            "isGraded": bool(a.get("isGraded")),
+            "grade": a.get("grade") or "",
         } for a in assignments or []]
 
     res = assignment_data.get("res") or {}
@@ -595,4 +604,70 @@ def get_digiicampus_assignments(class_ref: str, tool_context: ToolContext) -> di
         "status": "success",
         "previous_assignments": trim(res.get("previousAssignments")),
         "upcoming_assignments": trim(res.get("upcomingAssignments"))
+    }
+
+
+def get_digiicampus_assignment_details(class_ref: str, assignment_ref: str, tool_context: ToolContext) -> dict:
+    """
+    Gets the full details of ONE assignment, including its description, the files attached to the assignment (resources), and the files the user submitted for it.
+
+    Parameters:
+    class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool.
+    assignment_ref: The assignment_ref of the assignment, as returned by the get_digiicampus_assignments tool for the same class_ref.
+
+    Returns:
+    {"status":"success","name":"<ASSIGNMENT NAME>","description":"<FULL TASK DESCRIPTION>","start_date":"<YYYY-MM-DD HH:MM:SS>","due_date":"<YYYY-MM-DD HH:MM:SS>","isSubmitted":<true|false>,"resources":[{"media_ref":"<REF>","media_name":"<FILE NAME>"}, ...],"submissions":[...same schema...],isGraded":<true|false>,"grade":"<GRADE>","assignmentMarks": {"minimumMarks":<MINIMUM_MARKS>,"maximumMarks":<MAXIMUM_MARKS>}} -> Successful fetch. resources lists the file(s) attached to the assignment (e.g. the question PDF); submissions lists the file(s) the user submitted. Either list may be empty.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the content:
+    - Present the assignment with its name, description, start_date, due_date, and the list of resources and submitted files (if any).
+    - If isSubmitted is true -> the assignment has already been submitted.
+    - If dueDatePassed is true -> the assignment is overdue and can no longer be submitted.
+    """
+    state = tool_context.state
+    try:
+        token = _ensure_digiicampus_auth(state)
+        detail_data = digiicampus_api_get(
+            "/rest/assignments/v1/getStudentAssignmentDetails", token,
+            params={"assignmentId": assignment_ref, "classId": class_ref}
+        )
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Assignment details: " + str(e)}
+
+    # Resource and submitted files carry presigned URLs too: cache them in
+    # state so fetch_download_url can serve them, and give the LLM only
+    # name + ref.
+    media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
+
+    def trim_files(entries):
+        files = []
+        for entry in entries or []:
+            media_ref = str(entry.get("mediaId", ""))
+            if entry.get("mediaUrl"):
+                media_urls[media_ref] = entry["mediaUrl"]
+            files.append({
+                "media_ref": media_ref,
+                "media_name": (entry.get("mediaName") or "").replace("\xa0", " ").strip()
+            })
+        return files
+
+    resources = trim_files(detail_data.get("resources"))
+    submissions = trim_files(detail_data.get("submissions"))
+    state["DIGIICAMPUS_MEDIA_URLS_JSON"] = json.dumps(media_urls)
+
+    return {
+        "status": "success",
+        "name": detail_data.get("name") or "",
+        "description": (detail_data.get("description") or "").replace("\xa0", " ").strip(),
+        "start_date": detail_data.get("startDate") or "",
+        "due_date": detail_data.get("dueDate") or "",
+        "isSubmitted": bool(detail_data.get("isSubmitted")),
+        "due_date_passed": bool(detail_data.get("dueDatePassed")),
+        "resources": resources,
+        "submissions": submissions,
+        "isGraded": bool(detail_data.get("isGraded")),
+        "grade": detail_data.get("grade") or "",
+        "assignmentMarks": detail_data.get("assignmentMarks") or {}
     }

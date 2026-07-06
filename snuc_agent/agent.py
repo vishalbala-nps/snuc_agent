@@ -52,6 +52,7 @@ root_agent = Agent(
         get_digiicampus_course_modules,
         get_digiicampus_course_module_content,
         get_digiicampus_assignments,
+        get_digiicampus_assignment_details,
         fetch_download_url
     ]
 )

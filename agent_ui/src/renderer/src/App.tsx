@@ -1,5 +1,5 @@
 import { Loader2Icon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import { ChatThread } from '@/components/ChatThread'
@@ -16,13 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useChat } from '@/hooks/use-chat'
 import { useSessions } from '@/hooks/use-sessions'
-import {
-  checkHealth,
-  createSession,
-  deleteSession,
-  getSession,
-  updateState
-} from '@/lib/adk-client'
+import { checkHealth } from '@/lib/adk-client'
 import { onBackendDown } from '@/lib/backend-status'
 import { API_BASE } from '@/lib/config'
 

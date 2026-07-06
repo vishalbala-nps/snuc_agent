@@ -13,9 +13,27 @@ export function ChatThread({
   messages: UiMessage[]
   loading: boolean
 }): React.JSX.Element {
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const pinnedToBottom = useRef(true)
+
+  // The Radix ScrollArea viewport is the actual scrolling element.
+  const getViewport = (): HTMLElement | null =>
+    scrollRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null
+
+  // Follow the stream only while the user is at the bottom; scrolling up to
+  // read pauses the auto-scroll until they return to the bottom.
+  const handleScroll = (): void => {
+    const viewport = getViewport()
+    if (!viewport) return
+    pinnedToBottom.current =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 40
+  }
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView()
+    const viewport = getViewport()
+    if (viewport && pinnedToBottom.current) {
+      viewport.scrollTop = viewport.scrollHeight
+    }
   }, [messages])
 
   if (loading) {
@@ -42,12 +60,11 @@ export function ChatThread({
   }
 
   return (
-    <ScrollArea className="flex-1">
+    <ScrollArea ref={scrollRef} className="min-h-0 flex-1" onScrollCapture={handleScroll}>
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
-        <div ref={bottomRef} />
       </div>
     </ScrollArea>
   )

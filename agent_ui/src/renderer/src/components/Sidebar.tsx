@@ -52,7 +52,7 @@ export function Sidebar({
           <PlusIcon />
         </Button>
       </div>
-      <ScrollArea className="flex-1 px-2">
+      <ScrollArea className="min-h-0 flex-1 px-2">
         <div className="flex flex-col gap-1 pb-3">
           {sessions.map((session) => (
             <div

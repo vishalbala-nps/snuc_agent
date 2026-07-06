@@ -27,6 +27,7 @@ function App(): React.JSX.Element {
   )
 
   const handleNew = (): void => {
+    if (chat.streaming) return
     setActiveId(null)
     chat.clear()
   }
@@ -61,7 +62,7 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar
         sessions={sessions}
         activeId={activeId}
@@ -69,7 +70,7 @@ function App(): React.JSX.Element {
         onSelect={handleSelect}
         onDelete={handleDelete}
       />
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <ChatThread messages={chat.messages} loading={chat.loading} />
         <Composer streaming={chat.streaming} onSend={handleSend} onStop={chat.stop} />
       </main>

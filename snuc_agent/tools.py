@@ -54,24 +54,6 @@ def _ensure_digiicampus_auth(state) -> str:
     return token
 
 
-def _ensure_moodle_auth(state) -> tuple:
-    email = state.get("MOODLE_EMAIL")
-    password = state.get("MOODLE_PASSWORD")
-    if email and password:
-        return email, password
-    config = _read_config()
-    email = config.get("moodle", "email", fallback=None) if config.has_section("moodle") else None
-    password = config.get("moodle", "password", fallback=None) if config.has_section("moodle") else None
-    if not email or not password:
-        raise PrerequisiteError(
-            "The Moodle account is not configured. Tell the user to configure "
-            "their Moodle account details in Settings. Do not retry."
-        )
-    state["MOODLE_EMAIL"] = email
-    state["MOODLE_PASSWORD"] = password
-    return email, password
-
-
 def _ensure_user_details(state) -> None:
     if state.get("DIGIICAMPUS_USER_DETAILS_SET") == "True":
         return

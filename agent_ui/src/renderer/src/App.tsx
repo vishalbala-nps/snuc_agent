@@ -16,7 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useChat } from '@/hooks/use-chat'
 import { useSessions } from '@/hooks/use-sessions'
-import { checkHealth } from '@/lib/adk-client'
+import { checkHealth, createSession, deleteSession, updateState } from '@/lib/adk-client'
 import { onBackendDown } from '@/lib/backend-status'
 import { API_BASE } from '@/lib/config'
 
@@ -63,6 +63,25 @@ function App(): React.JSX.Element {
     chat.clear()
   }
 
+  const handleSaveToken = async (token: string): Promise<void> => {
+    try {
+      // The PATCH endpoint needs a session, but a "user:" key persists
+      // user-wide — so a throwaway session works when no chat is open yet.
+      let id = activeId
+      let temporary = false
+      if (!id) {
+        id = (await createSession()).id
+        temporary = true
+      }
+      await updateState(id, { 'user:DIGIICAMPUS_TOKEN': token })
+      if (temporary) await deleteSession(id)
+      toast.success('Digiicampus token saved')
+    } catch (e) {
+      if ((e as Error).name !== 'BackendDownError') toast.error((e as Error).message)
+      throw e
+    }
+  }
+
   const handleSelect = (id: string): void => {
     if (id === activeId || chat.streaming) return
     setActiveId(id)
@@ -100,6 +119,7 @@ function App(): React.JSX.Element {
         onNew={handleNew}
         onSelect={handleSelect}
         onDelete={handleDelete}
+        onSaveToken={handleSaveToken}
       />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <ChatThread messages={chat.messages} loading={chat.loading} />

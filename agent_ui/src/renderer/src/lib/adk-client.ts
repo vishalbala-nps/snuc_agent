@@ -65,6 +65,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * Applies a state delta to a session without running the agent. Keys with a
+ * "user:" prefix are persisted user-wide (shared by all sessions), not just
+ * on the given session.
+ */
+export async function updateState(
+  sessionId: string,
+  stateDelta: Record<string, unknown>
+): Promise<void> {
+  await apiFetch(`${SESSIONS_BASE}/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stateDelta })
+  })
+}
+
+/**
  * Streams one agent run. onEvent fires for every SSE event in order.
  * Throws BackendDownError if the server is unreachable (also mid-stream),
  * or Error if the server reports an error chunk.

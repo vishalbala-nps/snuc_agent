@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog'
+import { SettingsDialog } from '@/components/SettingsDialog'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { getTitle } from '@/lib/titles'
@@ -34,13 +35,15 @@ export function Sidebar({
   activeId,
   onNew,
   onSelect,
-  onDelete
+  onDelete,
+  onSaveToken
 }: {
   sessions: AdkSessionSummary[]
   activeId: string | null
   onNew: () => void
   onSelect: (id: string) => void
   onDelete: (id: string) => void
+  onSaveToken: (token: string) => Promise<void>
 }): React.JSX.Element {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
@@ -85,6 +88,9 @@ export function Sidebar({
           )}
         </div>
       </ScrollArea>
+      <div className="border-t p-2">
+        <SettingsDialog onSaveToken={onSaveToken} />
+      </div>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(o) => !o && setPendingDelete(null)}>
         <AlertDialogContent>

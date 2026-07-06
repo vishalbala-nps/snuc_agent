@@ -1,4 +1,3 @@
-import configparser
 import json
 import logging
 import requests
@@ -30,27 +29,13 @@ def digiicampus_api_get(endpoint: str, token: str, params: dict = None):
     response.raise_for_status()
     return response.json()
 
-def _read_config() -> configparser.ConfigParser:
-    config = configparser.ConfigParser()
-    if not config.read("config.ini"):
-        raise PrerequisiteError(
-            "Account details are not configured. Tell the user to configure their account details in Settings. Do not retry."
-        )
-    return config
-
-
 def _ensure_digiicampus_auth(state) -> str:
-    token = state.get("DIGIICAMPUS_TOKEN")
-    if token:
-        return token
-    config = _read_config()
-    token = config.get("digiicampus", "token", fallback=None) if config.has_section("digiicampus") else None
+    token = state.get("user:DIGIICAMPUS_TOKEN")
     if not token:
         raise PrerequisiteError(
             "The Digiicampus account is not configured. Tell the user to "
-            "configure their Digiicampus account details in Settings. Do not retry."
+            "set their Digiicampus token in the app's Settings. Do not retry."
         )
-    state["DIGIICAMPUS_TOKEN"] = token
     return token
 
 
@@ -96,7 +81,7 @@ def _ensure_terms(state) -> str:
     if state.get("DIGIICAMPUS_TERMS_SET") == "True":
         return state.get("DIGIICAMPUS_TERM_ID", "")
     _ensure_user_details(state)
-    token = state["DIGIICAMPUS_TOKEN"]
+    token = state["user:DIGIICAMPUS_TOKEN"]
     batch = state["DIGIICAMPUS_BATCH_YEAR"]
     programme = state["DIGIICAMPUS_PROGRAMME_ID"]
     try:
@@ -343,7 +328,7 @@ def get_attendance(tool_context: ToolContext) -> dict:
     try:
         attendance = digiicampus_api_get(
             "/api/attendance/student/" + str(state["DIGIICAMPUS_UKID"]) + "/term/" + str(term_id),
-            state["DIGIICAMPUS_TOKEN"]
+            state["user:DIGIICAMPUS_TOKEN"]
         )
     except requests.RequestException as e:
         return {"status": "error", "message": "Failed to fetch Attendance details: " + str(e)}
@@ -388,7 +373,7 @@ def get_mentor_details(tool_context: ToolContext) -> dict:
         _ensure_user_details(state)
         mentor_data = digiicampus_api_get(
             "/api/mentorManagement/mentee/mentor/" + str(state["DIGIICAMPUS_UKID"]),
-            state["DIGIICAMPUS_TOKEN"]
+            state["user:DIGIICAMPUS_TOKEN"]
         )
     except PrerequisiteError as e:
         return {"status": "error", "message": str(e)}
@@ -562,7 +547,7 @@ def get_digiicampus_assignments(class_ref: str, tool_context: ToolContext) -> di
         _ensure_user_details(state)
         assignment_data = digiicampus_api_get(
             "/rest/classes/" + str(class_ref) + "/users/" + state["DIGIICAMPUS_UKID"] + "/assignments",
-            state["DIGIICAMPUS_TOKEN"]
+            state["user:DIGIICAMPUS_TOKEN"]
         )
     except PrerequisiteError as e:
         return {"status": "error", "message": str(e)}

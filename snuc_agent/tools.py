@@ -489,3 +489,71 @@ def get_digiicampus_course_modules(class_ref: str, tool_context: ToolContext) ->
             "description": module.get("description") or ""
         })
     return {"status": "success", "modules": modules}
+
+def get_digiicampus_course_content(class_ref: str, tool_context: ToolContext) -> dict:
+    """
+    Gets the downloadable course content (files shared for each session), grouped by syllabus unit, of one course component.
+
+    Parameters:
+    class_ref: The class_ref of the course component, as returned by the get_digiicampus_courses tool.
+
+    Returns:
+    {"status":"success","content":{"<UNIT NAME>":{"unitDescription":"<UNIT TITLE>","sessions":[{"session_name":"<SESSION NAME>","media_ref":"<REF>","media_name":"<FILE NAME>","created_on":"<YYYY-MM-DD HH:MM:SS>"}, ...]}, ...}} -> Successful fetch. Empty object if the course has no content yet.
+    {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the content:
+    - Each unit maps to its list of sessions in the order they were taught; each session entry is one shared file.
+    - Present a session's file by its media_name and created_on date. The actual download link is stored internally, keyed by media_ref — you never see or output the URL itself.
+    - By default, give a short per-unit summary only: "<UNIT NAME> (<unitDescription>) — <N> files", then offer to list the files of a specific unit. Only list individual sessions/files for the unit(s) the user actually asked about, and only the session_name, media_name and date — never all units at once unless the user explicitly asks for everything.
+    """
+    state = tool_context.state
+    try:
+        token = _ensure_digiicampus_auth(state)
+        resource_data = digiicampus_api_get("/rest/classroomV2/resources", token, params={"classId": class_ref})
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
+    except requests.RequestException as e:
+        return {"status": "error", "message": "Failed to fetch Course content: " + str(e)}
+
+    # Keep the huge presigned URLs out of the LLM context: store them in state
+    # keyed by media_ref, so a download tool can look them up later.
+    media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
+
+    content = {}
+    for resource in sorted(resource_data, key=lambda r: (r.get("moduleOrder") or 0, r.get("sessionOrder") or 0)):
+        media_ref = str(resource.get("mediaId", ""))
+        if resource.get("mediaUrl"):
+            media_urls[media_ref] = resource["mediaUrl"]
+        unit = content.setdefault(resource.get("moduleName") or "", {
+            "unitDescription": resource.get("moduleTitle") or "",
+            "sessions": []
+        })
+        unit["sessions"].append({
+            "session_name": resource.get("sessionName") or "",
+            "media_ref": media_ref,
+            "media_name": resource.get("mediaName") or "",
+            "created_on": resource.get("createdTimestamp") or ""
+        })
+
+    state["DIGIICAMPUS_MEDIA_URLS_JSON"] = json.dumps(media_urls)
+    return {"status": "success", "content": content}
+
+
+def fetch_download_url(media_ref: str, tool_context: ToolContext) -> dict:
+    """
+    Prepares the download of one course content file. The download itself is handled by the app UI — you only need to call this tool and confirm to the user.
+
+    Parameters:
+    media_ref: The media_ref of the file, as returned by the get_digiicampus_course_content tool.
+
+    Returns:
+    {"status":"success","message":"Download prepared."} -> The download was prepared; tell the user the file's download is starting.
+    {"status":"error","message":"Unknown media_ref. Call the get_digiicampus_course_content tool for the course first, then retry ONCE with a media_ref it returned."} -> The given media_ref is not known. Follow the message.
+    """
+    state = tool_context.state
+    media_urls = json.loads(state.get("DIGIICAMPUS_MEDIA_URLS_JSON", "{}"))
+    url = media_urls.get(str(media_ref))
+    if not url:
+        return {"status": "error", "message": "Unknown media_ref. Call the get_digiicampus_course_content tool for the course first, then retry ONCE with a media_ref it returned."}
+    state["DOWNLOAD_URL"] = url
+    return {"status": "success", "message": "Download prepared."}

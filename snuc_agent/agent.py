@@ -25,18 +25,23 @@ def getModel() -> LiteLlm | str:
         os.environ["GOOGLE_API_KEY"] = key
         return variant
     elif model_type == "ollama":
-        return LiteLlm("ollama_chat/" + variant, num_ctx=16384, think=False)
+        return LiteLlm("ollama_chat/" + variant, num_ctx=16384)
     else:
         raise ValueError("Unsupported model! Cannot start agent")
 
 model = getModel()
 is_gemini = isinstance(model, str)
 
+def clear_download_url(tool, args, tool_context):
+    tool_context.state["DOWNLOAD_URL"] = ""
+    return None
+
 root_agent = Agent(
     model=model,
     name='root_agent',
     description='A helpful assistant for user questions.',
     static_instruction=prompts.STATIC_INSTRUCTION,
+    before_tool_callback=clear_download_url,
     tools=[
         get_digiicampus_posts,
         get_outpass_requests,
@@ -44,6 +49,8 @@ root_agent = Agent(
         get_attendance,
         get_mentor_details,
         get_digiicampus_courses,
-        get_digiicampus_course_modules
+        get_digiicampus_course_modules,
+        get_digiicampus_course_content,
+        fetch_download_url
     ]
 )

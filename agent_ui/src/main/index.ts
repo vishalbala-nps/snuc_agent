@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { spawn, ChildProcess } from 'child_process'
@@ -38,16 +38,36 @@ function createWindow(): void {
   }
 }
 
+// The directory that holds env/, snuc_agent/ and config.ini.
+// - dev: the repo root (parent of agent_ui/)
+// - packaged: the folder containing the executable/bundle. app.getAppPath()
+//   is NOT usable there — it points inside the read-only app.asar archive.
+//   - Windows portable: runs from a temp copy, so prefer the original
+//     location electron-builder exposes via PORTABLE_EXECUTABLE_DIR.
+//   - macOS: process.execPath is .../agent_ui.app/Contents/MacOS/agent_ui,
+//     three levels below the .app itself — env/ and snuc_agent/ are expected
+//     next to the .app bundle, not inside Contents/MacOS.
+function getBaseDir(): string {
+  if (is.dev) return join(app.getAppPath(), '..')
+  if (process.env['PORTABLE_EXECUTABLE_DIR']) return process.env['PORTABLE_EXECUTABLE_DIR']
+  if (process.platform === 'darwin') return join(dirname(process.execPath), '..', '..', '..')
+  return dirname(process.execPath)
+}
+
 function getAdkPath(): string {
   return process.platform === 'win32'
-    ? join(app.getAppPath(), 'env', 'Scripts', 'adk.exe')
-    : join(app.getAppPath(), 'env', 'bin', 'adk')
+    ? join(getBaseDir(), 'env', 'Scripts', 'adk.exe')
+    : join(getBaseDir(), 'env', 'bin', 'adk')
 }
 
 function startAdkServer(adkPath: string): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
     // No shell is involved, so the argument must not carry literal quotes.
-    const cmd = spawn(adkPath, ['api_server', 'snuc_agent', '--allow_origins=*'])
+    // cwd anchors the relative agents dir, the agent's config.ini read and
+    // ADK's session storage — a double-clicked app inherits an arbitrary cwd.
+    const cmd = spawn(adkPath, ['api_server', 'snuc_agent', '--allow_origins=*'], {
+      cwd: getBaseDir()
+    })
 
     cmd.once('spawn', () => resolve(cmd))
     cmd.once('error', reject)
@@ -123,12 +143,12 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:read', async () => {
-    return readFileSync(join(app.getAppPath(), 'config.ini'), 'utf8')
+    return readFileSync(join(getBaseDir(), 'config.ini'), 'utf8')
   })
 
   ipcMain.handle('config:write', async (_event, text: unknown) => {
     if (typeof text !== 'string') throw new Error('Invalid config payload')
-    writeFileSync(join(app.getAppPath(), 'config.ini'), text, 'utf8')
+    writeFileSync(join(getBaseDir(), 'config.ini'), text, 'utf8')
   })
 
   // Restarts the ADK server so config.ini changes (model provider/key)

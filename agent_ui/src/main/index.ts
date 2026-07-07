@@ -98,7 +98,7 @@ async function checkHealth(retryAttempt: number): Promise<boolean> {
   throw new Error('Health check failed')
 }
 
-async function launchAdk(): Promise<void> {
+async function spawnAdk(): Promise<void> {
   adkServer = await startAdkServer(getAdkPath())
 
   adkServer?.stdout?.on('data', (data) => {
@@ -108,7 +108,13 @@ async function launchAdk(): Promise<void> {
   adkServer?.stderr?.on('data', (data) => {
     console.error(`[backend] ${data}`)
   })
+}
 
+// Used by adk:restart, which needs to block until the freshly-restarted
+// server is actually serving requests. Boot uses spawnAdk() alone instead —
+// see the app.whenReady() handler below.
+async function launchAdk(): Promise<void> {
+  await spawnAdk()
   await checkHealth(50)
 }
 
@@ -158,8 +164,15 @@ app.whenReady().then(async () => {
     await launchAdk()
   })
 
+  ipcMain.handle('app:quit', () => {
+    app.quit()
+  })
+
   try {
-    await launchAdk()
+    // Health-checking is the renderer's job now (see useAdkBoot): the window
+    // shows immediately and polls /health itself, instead of the app
+    // appearing to hang for up to ~25s before a window ever exists.
+    await spawnAdk()
     createWindow()
   } catch (err) {
     const error = err as NodeJS.ErrnoException
@@ -167,7 +180,7 @@ app.whenReady().then(async () => {
 
     if (error.code === 'ENOENT') {
       message =
-        'Unable to find the Virtual Environment. Please configure the Virtual Environment and try again.'
+        'Virtual Environment missing or damaged. Please run install.py and try again'
     } else {
       message =
         'Failed to start the ADK Server. Please check the logs in adk-logs.txt and try again.'

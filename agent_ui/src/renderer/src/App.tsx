@@ -2,6 +2,7 @@ import { Loader2Icon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
+import { BootScreen } from '@/components/BootScreen'
 import { ChatThread } from '@/components/ChatThread'
 import { Composer } from '@/components/Composer'
 import { Sidebar } from '@/components/Sidebar'
@@ -15,12 +16,12 @@ import {
 } from '@/components/ui/alert-dialog'
 
 import { Button } from '@/components/ui/button'
+import { useAdkBoot } from '@/hooks/use-adk-boot'
 import { useChat } from '@/hooks/use-chat'
 import { useSessions } from '@/hooks/use-sessions'
 import { checkHealth } from '@/lib/adk-client'
 import { onBackendDown } from '@/lib/backend-status'
 import { API_BASE } from '@/lib/config'
-import { Spinner } from "@/components/ui/spinner"
 import { SettingsDialog } from './components/SettingsDialog'
 
 function App(): React.JSX.Element {
@@ -31,9 +32,13 @@ function App(): React.JSX.Element {
   const [retrying, setRetrying] = useState(false)
   const [uiLoad,setuiLoad] = useState(true)
   const [showModelConfig,setModelConfig] = useState(false)
-  // Subscribe before the first refresh() so a failing initial request
-  // immediately opens the dialog.
+  const adkStatus = useAdkBoot()
+
+  // Only start the config-check + backendDown wiring once ADK answers
+  // /health — before that, readConfig() would race a server that isn't
+  // listening yet.
   useEffect(function() {
+     if (adkStatus !== 'ready') return
      onBackendDown(() => setBackendDown(true))
      window.api.readConfig().then(function() {
         setuiLoad(false)
@@ -42,11 +47,15 @@ function App(): React.JSX.Element {
         setuiLoad(false)
         setModelConfig(true)
      })
-  }, [])
+  }, [adkStatus])
 
+  // Same reasoning: fetching the session list before ADK is up would fail
+  // immediately and spuriously trip the "backend down" dialog during normal
+  // startup.
   useEffect(() => {
+    if (adkStatus !== 'ready') return
     refresh()
-  }, [refresh])
+  }, [adkStatus, refresh])
 
   useEffect(
     () =>
@@ -104,13 +113,23 @@ function App(): React.JSX.Element {
     await chat.send(id, text)
     refresh()
   }
-  if (uiLoad) {
+  if (adkStatus === 'starting') {
+    return <BootScreen title="Waiting for ADK to be ready…" />
+  }
+
+  if (adkStatus === 'failed') {
     return (
-      <div className="flex h-screen overflow-hidden bg-background text-foreground">
-        <h3>Initializing....</h3>
-        <Spinner />
-      </div>
+      <BootScreen
+        title="Couldn't start the backend"
+        subtitle="Sorry about that — the ADK server didn't respond in time. You can quit and try again."
+        spinner={false}
+        action={<Button onClick={() => window.api.quitApp()}>Quit</Button>}
+      />
     )
+  }
+
+  if (uiLoad) {
+    return <BootScreen title="Initializing…" />
   } else {
     return (
       <div className="flex h-screen overflow-hidden bg-background text-foreground">

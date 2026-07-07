@@ -16,7 +16,8 @@ const api = {
   },
   readConfig: (): Promise<string> => ipcRenderer.invoke('config:read'),
   writeConfig: (text: string): Promise<void> => ipcRenderer.invoke('config:write', text),
-  restartAdk: (): Promise<void> => ipcRenderer.invoke('adk:restart')
+  restartAdk: (): Promise<void> => ipcRenderer.invoke('adk:restart'),
+  quitApp: (): Promise<void> => ipcRenderer.invoke('app:quit')
 }
 
 export type Api = typeof api

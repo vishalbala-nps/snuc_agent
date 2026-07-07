@@ -4,10 +4,11 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { spawn, ChildProcess } from 'child_process'
 import { dialog } from 'electron'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, createWriteStream, WriteStream } from 'fs'
 
 let mainWindow: BrowserWindow | null = null
 let adkServer: ChildProcess | null = null
+let logStream: WriteStream | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -60,6 +61,19 @@ function getAdkPath(): string {
     : join(getBaseDir(), 'env', 'bin', 'adk')
 }
 
+// Lazily opened once per app launch (truncating any previous run's log),
+// then reused as-is across adk:restart calls so a restart's output appends
+// to the same file instead of starting a new one.
+function getLogStream(): WriteStream {
+  if (!logStream) {
+    logStream = createWriteStream(join(getBaseDir(), 'adk-logs.txt'), { flags: 'w' })
+    logStream.on('error', (err) => {
+      console.error('Failed to write adk-logs.txt:', err)
+    })
+  }
+  return logStream
+}
+
 function startAdkServer(adkPath: string): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
     // No shell is involved, so the argument must not carry literal quotes.
@@ -103,10 +117,12 @@ async function spawnAdk(): Promise<void> {
 
   adkServer?.stdout?.on('data', (data) => {
     console.log(`[backend] ${data}`)
+    getLogStream().write(data)
   })
 
   adkServer?.stderr?.on('data', (data) => {
     console.error(`[backend] ${data}`)
+    getLogStream().write(data)
   })
 }
 
@@ -208,4 +224,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', async () => {
   await stopAdk()
+  logStream?.end()
+  logStream = null
 })

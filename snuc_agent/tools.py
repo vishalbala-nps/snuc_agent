@@ -7,6 +7,7 @@ from google.adk.tools import ToolContext
 logger = logging.getLogger(__name__)
 
 DIGIICAMPUS_BASE_URL = "https://snuc.digiicampus.com"
+MIN_ATTENDANCE_PERCENTAGE = 75
 
 #Errors
 class PrerequisiteError(Exception):
@@ -111,6 +112,31 @@ def _ensure_terms(state) -> str:
     state["DIGIICAMPUS_TERM_ID"] = active_term_id
     state["DIGIICAMPUS_TERMS_SET"] = "True"
     return active_term_id
+
+
+def _ensure_component_types(state) -> dict:
+    """Fetches and caches the courseComponentTypeId -> name mapping.
+
+    Includes deleted types too: older courses can still reference a
+    component type (e.g. the legacy "Theory"/"Lab" ids) that has since
+    been marked isDeleted.
+    """
+    if state.get("DIGIICAMPUS_COMPONENT_TYPES_SET") == "True":
+        return json.loads(state.get("DIGIICAMPUS_COMPONENT_TYPES_JSON", "{}"))
+    token = _ensure_digiicampus_auth(state)
+    try:
+        types_data = digiicampus_api_get("/api/structure/courseComponentType/", token)
+    except requests.RequestException as e:
+        raise PrerequisiteError("Failed to fetch course component types: " + str(e))
+
+    mapping = {
+        str(t["id"]): t.get("name", "")
+        for t in types_data or []
+        if t.get("id") is not None
+    }
+    state["DIGIICAMPUS_COMPONENT_TYPES_JSON"] = json.dumps(mapping)
+    state["DIGIICAMPUS_COMPONENT_TYPES_SET"] = "True"
+    return mapping
 
 
 #Tools exposed to the LLM
@@ -307,14 +333,20 @@ def get_terms(tool_context: ToolContext) -> dict:
 
 def get_attendance(tool_context: ToolContext) -> dict:
     """
-    Gets the user's attendance for the currently active term, overall and per course. 
+    Gets the user's attendance for the currently active term, overall and per course component.
 
     Parameters: None
 
     Returns:
-    {"status":"success","overall":{"present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>,"approved_leaves":<N>,"unapproved_leaves":<N>},"courses":[{"course":"<COURSE NAME>","course_code":"<COURSE CODE>","present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>}, ...]} -> Successful fetch.
+    {"status":"success","overall":{"present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>,"approved_leaves":<N>,"unapproved_leaves":<N>},"courses":[{"course":"<COURSE NAME>","course_code":"<CODE>","component":"<Lecture|Practical|Tutorial|...>","present":<N>,"absent":<N>,"total_classes":<N>,"percentage":<0-100>,"meets_attendance_requirement":<true|false|null>}, ...]} -> Successful fetch.
     {"status":"unavailable","message":"<MESSAGE>"} -> No active term exists, so attendance cannot be fetched. Final. Report to the user; do NOT retry.
     {"status":"error","message":"<ERROR MESSAGE>"} -> Final failure. Report the message to the user; do NOT retry.
+
+    Notes on interpreting the courses:
+    - Each course COMPONENT is its own entry (e.g. a course with separate Lecture and Practical components produces two entries) — every entry's attendance and eligibility must be reported independently, even if they share a course name.
+    - meets_attendance_requirement is this tool's own judgement of the University's minimum-attendance rule, already applied to the exact percentage — always rely on this field to state eligibility, NEVER compare the percentage to 75 (or any number) yourself.
+    - meets_attendance_requirement is null when total_classes is 0 (no classes recorded yet for that component): present it as "no attendance recorded yet", not as ineligible.
+    - The 60%-with-medical-certificate relaxation is a separate, manual determination this tool cannot make; mention it only as a possibility for entries where meets_attendance_requirement is false.
     """
     state = tool_context.state
     try:
@@ -326,10 +358,13 @@ def get_attendance(tool_context: ToolContext) -> dict:
         return {"status": "unavailable", "message": "No term is currently active, so attendance is unavailable. Report this to the user; do NOT retry."}
 
     try:
+        component_types = _ensure_component_types(state)
         attendance = digiicampus_api_get(
             "/api/attendance/student/" + str(state["DIGIICAMPUS_UKID"]) + "/term/" + str(term_id),
             state["user:DIGIICAMPUS_TOKEN"]
         )
+    except PrerequisiteError as e:
+        return {"status": "error", "message": str(e)}
     except requests.RequestException as e:
         return {"status": "error", "message": "Failed to fetch Attendance details: " + str(e)}
 
@@ -341,20 +376,30 @@ def get_attendance(tool_context: ToolContext) -> dict:
         "approved_leaves": attendance.get("approvedLeaves", 0),
         "unapproved_leaves": attendance.get("unapprovedLeaves", 0)
     }
+
+    # The course-level totals are unreliable for multi-component courses (a
+    # course with both Theory and Lab can report all-zero totals at this
+    # level) — the per-component entries are the accurate, always-present
+    # source, so build every row from those instead.
     courses = []
     for course in attendance.get("courseAttendance", []):
-        code = course.get("courseCode")
-        if not code:
-            components = course.get("components") or []
-            code = components[0].get("courseCode") if components else ""
-        courses.append({
-            "course": (course.get("courseName") or "").replace("\xa0", " "),
-            "course_code": (code or "").strip(),
-            "present": course.get("totalPresent", 0),
-            "absent": course.get("totalAbsent", 0),
-            "total_classes": course.get("totalClasses", 0),
-            "percentage": round(course.get("percentage") or 0, 2)
-        })
+        course_name = (course.get("courseName") or "").replace("\xa0", " ").strip()
+        for component in course.get("components") or []:
+            total_classes = component.get("totalClasses", 0)
+            percentage = round(component.get("percentage") or 0, 2)
+            type_id = component.get("courseComponentTypeId")
+            courses.append({
+                "course": course_name,
+                "course_code": (component.get("courseCode") or "").strip(),
+                "component": component_types.get(str(type_id), str(type_id) if type_id is not None else ""),
+                "present": component.get("totalPresent", 0),
+                "absent": component.get("totalAbsent", 0),
+                "total_classes": total_classes,
+                "percentage": percentage,
+                "meets_attendance_requirement": (
+                    None if not total_classes else percentage >= MIN_ATTENDANCE_PERCENTAGE
+                )
+            })
     return {"status": "success", "overall": overall, "courses": courses}
 
 

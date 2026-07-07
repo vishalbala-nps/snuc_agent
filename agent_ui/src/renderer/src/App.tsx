@@ -13,12 +13,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog'
+
 import { Button } from '@/components/ui/button'
 import { useChat } from '@/hooks/use-chat'
 import { useSessions } from '@/hooks/use-sessions'
 import { checkHealth } from '@/lib/adk-client'
 import { onBackendDown } from '@/lib/backend-status'
 import { API_BASE } from '@/lib/config'
+import { Spinner } from "@/components/ui/spinner"
+import { SettingsDialog } from './components/SettingsDialog'
 
 function App(): React.JSX.Element {
   const { sessions, refresh, create, remove } = useSessions()
@@ -26,10 +29,20 @@ function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [backendDown, setBackendDown] = useState(false)
   const [retrying, setRetrying] = useState(false)
-
+  const [uiLoad,setuiLoad] = useState(true)
+  const [showModelConfig,setModelConfig] = useState(false)
   // Subscribe before the first refresh() so a failing initial request
   // immediately opens the dialog.
-  useEffect(() => onBackendDown(() => setBackendDown(true)), [])
+  useEffect(function() {
+     onBackendDown(() => setBackendDown(true))
+     window.api.readConfig().then(function() {
+        setuiLoad(false)
+        setModelConfig(false)
+     }).catch(function() {
+        setuiLoad(false)
+        setModelConfig(true)
+     })
+  }, [])
 
   useEffect(() => {
     refresh()
@@ -91,42 +104,51 @@ function App(): React.JSX.Element {
     await chat.send(id, text)
     refresh()
   }
+  if (uiLoad) {
+    return (
+      <div className="flex h-screen overflow-hidden bg-background text-foreground">
+        <h3>Initializing....</h3>
+        <Spinner />
+      </div>
+    )
+  } else {
+    return (
+      <div className="flex h-screen overflow-hidden bg-background text-foreground">
+        <SettingsDialog open={showModelConfig} setOpen={setModelConfig} onNoConfig={true} />
+        <Sidebar
+          sessions={sessions}
+          activeId={activeId}
+          onNew={handleNew}
+          onSelect={handleSelect}
+          onDelete={handleDelete}
+        />
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <ChatThread messages={chat.messages} loading={chat.loading} />
+          <Composer streaming={chat.streaming} onSend={handleSend} onStop={chat.stop} />
+        </main>
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      <Sidebar
-        sessions={sessions}
-        activeId={activeId}
-        onNew={handleNew}
-        onSelect={handleSelect}
-        onDelete={handleDelete}
-      />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <ChatThread messages={chat.messages} loading={chat.loading} />
-        <Composer streaming={chat.streaming} onSend={handleSend} onStop={chat.stop} />
-      </main>
-
-      {/* Controlled and without any cancel action, so it cannot be dismissed
-          until the backend is reachable again. */}
-      <AlertDialog open={backendDown}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Backend unavailable</AlertDialogTitle>
-            <AlertDialogDescription>
-              The SNUC Agent backend (ADK API server) isn&apos;t reachable at {API_BASE}. Start it
-              with <code className="font-mono text-xs">adk api_server</code> and try again.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <Button onClick={handleRetry} disabled={retrying}>
-              {retrying && <Loader2Icon className="animate-spin" />}
-              Try Again
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
+        {/* Controlled and without any cancel action, so it cannot be dismissed
+            until the backend is reachable again. */}
+        <AlertDialog open={backendDown}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Backend unavailable</AlertDialogTitle>
+              <AlertDialogDescription>
+                The SNUC Agent backend (ADK API server) isn&apos;t reachable at {API_BASE}. Start it
+                with <code className="font-mono text-xs">adk api_server</code> and try again.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button onClick={handleRetry} disabled={retrying}>
+                {retrying && <Loader2Icon className="animate-spin" />}
+                Try Again
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    ) 
+  }
 }
 
 export default App

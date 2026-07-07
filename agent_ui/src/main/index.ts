@@ -3,10 +3,11 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { spawn, ChildProcess } from 'child_process'
-import { dialog } from "electron";
+import { dialog } from 'electron'
+import { readFileSync, writeFileSync } from 'fs'
 
 let mainWindow: BrowserWindow | null = null
-let adkServer: ChildProcess | null = null;
+let adkServer: ChildProcess | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -17,8 +18,7 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      webSecurity: false
+      sandbox: false
     }
   })
 
@@ -38,41 +38,67 @@ function createWindow(): void {
   }
 }
 
+function getAdkPath(): string {
+  return process.platform === 'win32'
+    ? join(app.getAppPath(), 'env', 'Scripts', 'adk.exe')
+    : join(app.getAppPath(), 'env', 'bin', 'adk')
+}
+
 function startAdkServer(adkPath: string): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
-    const cmd = spawn(adkPath, [
-      "api_server",
-      "snuc_agent",
-      '--allow_origins="*"'
-    ]);
+    // No shell is involved, so the argument must not carry literal quotes.
+    const cmd = spawn(adkPath, ['api_server', 'snuc_agent', '--allow_origins=*'])
 
-    cmd.once("spawn", () => resolve(cmd));
-    cmd.once("error", reject);
-  });
+    cmd.once('spawn', () => resolve(cmd))
+    cmd.once('error', reject)
+  })
 }
 
 async function checkHealth(retryAttempt: number): Promise<boolean> {
   for (let i = 0; i <= retryAttempt; i++) {
     try {
-      console.log("Health Check Attempt:", i);
+      console.log('Health Check Attempt:', i)
 
-      const res = await fetch("http://127.0.0.1:8000/health");
-      const data = await res.json();
+      const res = await fetch('http://127.0.0.1:8000/health')
+      const data = await res.json()
 
-      if (data.status === "ok") {
-        return true;
+      if (data.status === 'ok') {
+        return true
       }
     } catch {
       // Ignore and retry
     }
 
-    // Wait 1 second before the next attempt (except after the last one)
+    // Wait 500ms before the next attempt (except after the last one)
     if (i < retryAttempt) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
   }
 
-  throw new Error("Health check failed");
+  throw new Error('Health check failed')
+}
+
+async function launchAdk(): Promise<void> {
+  adkServer = await startAdkServer(getAdkPath())
+
+  adkServer?.stdout?.on('data', (data) => {
+    console.log(`[backend] ${data}`)
+  })
+
+  adkServer?.stderr?.on('data', (data) => {
+    console.error(`[backend] ${data}`)
+  })
+
+  await checkHealth(50)
+}
+
+async function stopAdk(): Promise<void> {
+  if (adkServer && !adkServer.killed && adkServer.exitCode === null) {
+    const exited = new Promise<void>((resolve) => adkServer?.once('exit', () => resolve()))
+    adkServer.kill()
+    await exited
+  }
+  adkServer = null
 }
 
 app.whenReady().then(async () => {
@@ -96,44 +122,45 @@ app.whenReady().then(async () => {
     mainWindow?.webContents.downloadURL(url)
   })
 
-const adkPath =
-  process.platform === "win32"
-    ? join(app.getAppPath(), "env", "Scripts", "adk.exe")
-    : join(app.getAppPath(), "env", "bin", "adk");
+  ipcMain.handle('config:read', async () => {
+    return readFileSync(join(app.getAppPath(), 'config.ini'), 'utf8')
+  })
+
+  ipcMain.handle('config:write', async (_event, text: unknown) => {
+    if (typeof text !== 'string') throw new Error('Invalid config payload')
+    writeFileSync(join(app.getAppPath(), 'config.ini'), text, 'utf8')
+  })
+
+  // Restarts the ADK server so config.ini changes (model provider/key)
+  // take effect — the agent reads its config at import time.
+  ipcMain.handle('adk:restart', async () => {
+    await stopAdk()
+    await launchAdk()
+  })
 
   try {
-    adkServer = await startAdkServer(adkPath);
-
-    adkServer?.stdout?.on("data", (data) => {
-      console.log(`[backend] ${data}`);
-    });
-
-    adkServer?.stderr?.on("data", (data) => {
-      console.error(`[backend] ${data}`);
-    });
-
-    await checkHealth(50);
-    createWindow();
+    await launchAdk()
+    createWindow()
   } catch (err) {
-    const error = err as NodeJS.ErrnoException;
-    let message: string;
+    const error = err as NodeJS.ErrnoException
+    let message: string
 
-    if (error.code === "ENOENT") {
+    if (error.code === 'ENOENT') {
       message =
-        "Unable to find the Virtual Environment. Please configure the Virtual Environment and try again.";
+        'Unable to find the Virtual Environment. Please configure the Virtual Environment and try again.'
     } else {
       message =
-        "Failed to start the ADK Server. Please check the logs in adk-logs.txt and try again.";
+        'Failed to start the ADK Server. Please check the logs in adk-logs.txt and try again.'
     }
 
     await dialog.showMessageBox({
-      type: "error",
-      title: "Failed to start ADK Server",
+      type: 'error',
+      title: 'Failed to start ADK Server',
       message,
-      buttons: ["OK"],
-    });
+      buttons: ['OK']
+    })
 
-    app.quit();
+    app.quit()
   }
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -146,8 +173,6 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on("before-quit", () => {
-  if (adkServer && !adkServer.killed) {
-    adkServer.kill();
-  }
-});
+app.on('before-quit', async () => {
+  await stopAdk()
+})

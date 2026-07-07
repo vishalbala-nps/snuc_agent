@@ -13,7 +13,10 @@ const api = {
     const handler = (_event: unknown, info: DownloadDoneInfo): void => callback(info)
     ipcRenderer.on('download:done', handler)
     return () => ipcRenderer.removeListener('download:done', handler)
-  }
+  },
+  readConfig: (): Promise<string> => ipcRenderer.invoke('config:read'),
+  writeConfig: (text: string): Promise<void> => ipcRenderer.invoke('config:write', text),
+  restartAdk: (): Promise<void> => ipcRenderer.invoke('adk:restart')
 }
 
 export type Api = typeof api

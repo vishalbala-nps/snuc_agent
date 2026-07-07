@@ -1,4 +1,5 @@
-import { Loader2Icon, SettingsIcon } from 'lucide-react'
+import { parse, stringify } from 'ini'
+import { Loader2Icon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -9,12 +10,28 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
-  DialogTrigger
+  DialogTitle
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { createSession, deleteSession, getSession, updateState } from '@/lib/adk-client'
+
+interface SettingsDialogProps {
+  open: boolean;
+  setOpen: (value: boolean) => void;
+  onNoConfig?: boolean;
+}
+
+type Provider = 'ollama' | 'gemini' | ''
+
+const DEFAULT_GEMINI_VARIANT = 'gemini-flash-latest'
 
 // "user:" state keys persist user-wide, but the ADK endpoints for reading and
 // writing state are session-scoped — so run each operation through a
@@ -43,23 +60,70 @@ async function saveToken(token: string): Promise<void> {
   await withTempSession((id) => updateState(id, { 'user:DIGIICAMPUS_TOKEN': token }))
 }
 
-export function SettingsDialog(): React.JSX.Element {
-  const [open, setOpen] = useState(false)
+interface ModelConfig {
+  provider: Provider
+  modelName: string
+  apiKey: string
+  geminiVariant: string
+}
+
+async function loadModelConfig(): Promise<ModelConfig> {
+  try {
+    const cfg = parse(await window.api.readConfig())
+    const model = (cfg.model ?? {}) as Record<string, string>
+    const provider: Provider = model.model === 'ollama' || model.model === 'gemini' ? model.model : ''
+    return {
+      provider,
+      modelName: provider === 'ollama' ? (model.variant ?? '') : '',
+      apiKey: model.key ?? '',
+      geminiVariant: provider === 'gemini' && model.variant ? model.variant : DEFAULT_GEMINI_VARIANT
+    }
+  } catch {
+    return { provider: '', modelName: '', apiKey: '', geminiVariant: DEFAULT_GEMINI_VARIANT }
+  }
+}
+
+async function saveModelConfig(model: ModelConfig): Promise<void> {
+  // Preserve any other sections that may exist in config.ini.
+  let cfg: Record<string, unknown> = {}
+  try {
+    cfg = parse(await window.api.readConfig())
+  } catch {
+    // No config yet — start fresh.
+  }
+  cfg.model =
+    model.provider === 'ollama'
+      ? { model: 'ollama', variant: model.modelName }
+      : { model: 'gemini', variant: model.geminiVariant, key: model.apiKey }
+  await window.api.writeConfig(stringify(cfg))
+  // The agent reads config.ini at import time, so apply via a server restart.
+  await window.api.restartAdk()
+}
+
+export function SettingsDialog({open,setOpen,onNoConfig = false} : SettingsDialogProps): React.JSX.Element {
   const [token, setToken] = useState('')
   const [savedToken, setSavedToken] = useState('')
+  const [provider, setProvider] = useState<Provider>('')
+  const [modelName, setModelName] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [savedModel, setSavedModel] = useState<ModelConfig | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Fetch the stored token only when the dialog opens; the password input
-  // keeps it masked.
+  // Fetch the stored token and model config only when the dialog opens; the
+  // password inputs keep secrets masked.
   useEffect(() => {
     if (!open) return
     let cancelled = false
     setLoading(true)
-    loadToken().then((existing) => {
+    Promise.all([loadToken(), loadModelConfig()]).then(([existingToken, model]) => {
       if (cancelled) return
-      setToken(existing)
-      setSavedToken(existing)
+      setToken(existingToken)
+      setSavedToken(existingToken)
+      setProvider(model.provider)
+      setModelName(model.modelName)
+      setApiKey(model.provider === 'gemini' ? model.apiKey : '')
+      setSavedModel(model)
       setLoading(false)
     })
     return () => {
@@ -67,13 +131,32 @@ export function SettingsDialog(): React.JSX.Element {
     }
   }, [open])
 
+  const modelValid =
+    provider === 'ollama' ? modelName.trim() !== '' : provider === 'gemini' ? apiKey.trim() !== '' : false
+  const modelChanged =
+    savedModel !== null &&
+    (provider !== savedModel.provider ||
+      (provider === 'ollama' && modelName.trim() !== savedModel.modelName) ||
+      (provider === 'gemini' && apiKey.trim() !== savedModel.apiKey))
+  const tokenChanged = token.trim() !== '' && token.trim() !== savedToken
+  const canSave = modelValid && (modelChanged || tokenChanged)
+
   const save = async (): Promise<void> => {
-    const trimmed = token.trim()
-    if (!trimmed || trimmed === savedToken) return
+    if (!canSave || saving) return
     setSaving(true)
     try {
-      await saveToken(trimmed)
-      toast.success('Digiicampus token saved')
+      if (modelChanged) {
+        await saveModelConfig({
+          provider,
+          modelName: modelName.trim(),
+          apiKey: apiKey.trim(),
+          geminiVariant: savedModel?.geminiVariant ?? DEFAULT_GEMINI_VARIANT
+        })
+      }
+      if (tokenChanged) {
+        await saveToken(token.trim())
+      }
+      toast.success('Settings saved')
       setOpen(false)
     } catch (e) {
       if ((e as Error).name !== 'BackendDownError') toast.error((e as Error).message)
@@ -83,20 +166,65 @@ export function SettingsDialog(): React.JSX.Element {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" className="w-full justify-start gap-2">
-          <SettingsIcon className="size-4" />
-          Settings
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={onNoConfig ? undefined : setOpen}>
+      <DialogContent showCloseButton={!onNoConfig}>
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Credentials the agent uses to reach the university portals.
+            The model the agent runs on, and the credentials it uses to reach the university
+            portals.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="model-provider">Model provider</Label>
+          <Select
+            value={provider}
+            onValueChange={(value) => setProvider(value as Provider)}
+            disabled={loading}
+          >
+            <SelectTrigger id="model-provider" className="w-full">
+              <SelectValue placeholder={loading ? 'Loading…' : 'Select a provider'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ollama">Ollama</SelectItem>
+              <SelectItem value="gemini">Gemini</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {provider === 'ollama' && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="ollama-model">Model name</Label>
+            <Input
+              id="ollama-model"
+              value={modelName}
+              onChange={(e) => setModelName(e.target.value)}
+              placeholder="e.g. qwen3:latest"
+              disabled={loading}
+              autoComplete="off"
+            />
+            <p className="text-xs text-muted-foreground">
+              A model available in your local Ollama install.
+            </p>
+          </div>
+        )}
+
+        {provider === 'gemini' && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="gemini-key">API key</Label>
+            <Input
+              id="gemini-key"
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="Your Google AI Studio API key"
+              disabled={loading}
+              autoComplete="off"
+            />
+          </div>
+        )}
+
         <div className="flex flex-col gap-2">
           <Label htmlFor="digiicampus-token">Digiicampus token</Label>
           <div className="relative">
@@ -118,13 +246,11 @@ export function SettingsDialog(): React.JSX.Element {
             Saved as user state, so it applies to every chat.
           </p>
         </div>
+
         <DialogFooter>
-          <Button
-            onClick={save}
-            disabled={loading || saving || !token.trim() || token.trim() === savedToken}
-          >
+          <Button onClick={save} disabled={loading || saving || !canSave}>
             {saving && <Loader2Icon className="animate-spin" />}
-            Save
+            {saving && modelChanged ? 'Restarting backend…' : 'Save'}
           </Button>
         </DialogFooter>
       </DialogContent>

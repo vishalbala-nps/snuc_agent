@@ -1,4 +1,4 @@
-import { PlusIcon, Trash2Icon } from 'lucide-react'
+import { PlusIcon, Trash2Icon,SettingsIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -43,10 +43,15 @@ export function Sidebar({
   onSelect: (id: string) => void
   onDelete: (id: string) => void
 }): React.JSX.Element {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+      <SettingsDialog 
+        setOpen={setSettingsOpen}
+        open={settingsOpen}
+      />
       <div className="flex items-center justify-between p-3">
         <span className="px-1 text-sm font-semibold">SNUC Agent</span>
         <Button size="icon" variant="ghost" onClick={onNew} aria-label="New chat">
@@ -87,7 +92,12 @@ export function Sidebar({
         </div>
       </ScrollArea>
       <div className="border-t p-2">
-        <SettingsDialog />
+        <Button variant="ghost" className="w-full justify-start gap-2" onClick={function() {
+          setSettingsOpen(true)
+        }}>
+          <SettingsIcon className="size-4" />
+          Settings
+        </Button>
       </div>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(o) => !o && setPendingDelete(null)}>

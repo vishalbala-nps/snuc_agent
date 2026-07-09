@@ -31,10 +31,10 @@ The assistant is built on **Google's Agent Development Kit (ADK)** and wrapped i
 
 * **Python 3.12+**
 * [uv](https://docs.astral.sh/uv/) — used to create the virtual environment and install Python dependencies
-* One of:
+* Either one of:
   * [Ollama](https://ollama.com/) installed locally, with a model pulled (e.g. `ollama pull qwen3:latest`), **or**
   * A **Google Gemini API key** ([Google AI Studio](https://aistudio.google.com/))
-* A Digiicampus account (SNU Chennai) — the app needs its auth token to fetch your data (see Settings inside the app for instructions on obtaining it).
+* A Digiicampus account (SNU Chennai)
 
 ## Installation
 

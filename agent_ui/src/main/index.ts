@@ -39,14 +39,14 @@ function createWindow(): void {
   }
 }
 
-// The directory that holds env/, snuc_agent/ and config.ini.
+// The directory that holds .venv/, snuc_agent/ and config.ini.
 // - dev: the repo root (parent of agent_ui/)
 // - packaged: the folder containing the executable/bundle. app.getAppPath()
 //   is NOT usable there — it points inside the read-only app.asar archive.
 //   - Windows portable: runs from a temp copy, so prefer the original
 //     location electron-builder exposes via PORTABLE_EXECUTABLE_DIR.
 //   - macOS: process.execPath is .../agent_ui.app/Contents/MacOS/agent_ui,
-//     three levels below the .app itself — env/ and snuc_agent/ are expected
+//     three levels below the .app itself — .venv/ and snuc_agent/ are expected
 //     next to the .app bundle, not inside Contents/MacOS.
 function getBaseDir(): string {
   if (is.dev) return join(app.getAppPath(), '..')
@@ -57,8 +57,8 @@ function getBaseDir(): string {
 
 function getAdkPath(): string {
   return process.platform === 'win32'
-    ? join(getBaseDir(), 'env', 'Scripts', 'adk.exe')
-    : join(getBaseDir(), 'env', 'bin', 'adk')
+    ? join(getBaseDir(), '.venv', 'Scripts', 'adk.exe')
+    : join(getBaseDir(), '.venv', 'bin', 'adk')
 }
 
 // Lazily opened once per app launch (truncating any previous run's log),

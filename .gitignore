@@ -12,3 +12,5 @@ node_modules
 *exe
 *AppImage
 adk-logs.txt
+*zip
+.venv

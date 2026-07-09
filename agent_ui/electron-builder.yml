@@ -1,5 +1,5 @@
 appId: com.electron.app
-productName: agent_ui
+productName: snuc_agent
 directories:
   buildResources: build
 files:
@@ -12,10 +12,10 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: agent_ui
+  executableName: snuc_agent
   target: portable
 portable:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}-${version}.${ext}
 mac:
   target: dir
   entitlementsInherit: build/entitlements.mac.plist
@@ -28,9 +28,8 @@ mac:
 linux:
   target:
     - AppImage
-  maintainer: electronjs.org
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}-${version}.${ext}
 npmRebuild: false
 publish: null

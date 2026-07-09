@@ -1,0 +1,10 @@
+[project]
+name = "snuc-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "configparser>=7.2.0",
+    "google-adk[extensions]>=2.4.0",
+    "litellm>=1.91.1",
+    "requests>=2.34.2",
+]

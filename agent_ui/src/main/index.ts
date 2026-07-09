@@ -196,7 +196,7 @@ app.whenReady().then(async () => {
 
     if (error.code === 'ENOENT') {
       message =
-        'Virtual Environment missing or damaged. Please run install.py and try again'
+        'Virtual Environment missing or damaged. Please run the command: uv sync and try again'
     } else {
       message =
         'Failed to start the ADK Server. Please check the logs in adk-logs.txt and try again.'

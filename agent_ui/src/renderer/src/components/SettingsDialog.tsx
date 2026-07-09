@@ -101,6 +101,7 @@ async function saveModelConfig(model: ModelConfig): Promise<void> {
 }
 
 export function SettingsDialog({open,setOpen,onNoConfig = false} : SettingsDialogProps): React.JSX.Element {
+  const [helpOpen, setHelpOpen] = useState(false)
   const [token, setToken] = useState('')
   const [savedToken, setSavedToken] = useState('')
   const [provider, setProvider] = useState<Provider>('')
@@ -242,9 +243,13 @@ export function SettingsDialog({open,setOpen,onNoConfig = false} : SettingsDialo
               <Loader2Icon className="absolute top-1/2 right-2.5 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
             )}
           </div>
-          <p className="text-xs text-muted-foreground">
-            Saved as user state, so it applies to every chat.
-          </p>
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="w-fit text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Where do I find my Digiicampus token?
+          </button>
         </div>
 
         <DialogFooter>
@@ -254,6 +259,28 @@ export function SettingsDialog({open,setOpen,onNoConfig = false} : SettingsDialo
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Finding your Digiicampus token</DialogTitle>
+            <DialogDescription>
+              The token is stored as a browser cookie once you're signed in — here's how to copy
+              it.
+            </DialogDescription>
+          </DialogHeader>
+          <ol className="list-decimal space-y-2 pl-5 text-sm">
+            <li>Open Google Chrome and sign in to Digiicampus.</li>
+            <li>Right-click anywhere on the page and choose "Inspect" to open Developer Tools.</li>
+            <li>Switch to the "Application" tab.</li>
+            <li>
+              In the left sidebar, expand "Cookies" and select{' '}
+              <code className="font-mono text-xs">https://snuc.digiicampus.com</code>.
+            </li>
+            <li>Find the cookie named "user", copy its value, and paste it into the field above.</li>
+          </ol>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

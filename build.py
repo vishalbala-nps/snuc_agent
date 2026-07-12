@@ -49,6 +49,10 @@ def main() -> None:
         sys.exit(f"Usage: python build.py <{'|'.join(BUILD_TARGETS)}>")
 
     target = sys.argv[1]
+
+    # ADK's local session storage — never ship users' chat history in the zip.
+    shutil.rmtree(ROOT / "snuc_agent" / ".adk", ignore_errors=True)
+
     NPM = shutil.which("npm")
     if not NPM:
         sys.exit("Node.js not installed. Please install Node.js and try again")

@@ -49,9 +49,25 @@ function createWindow(): void {
 //     three levels below the .app itself — .venv/ and snuc_agent/ are expected
 //     next to the .app bundle, not inside Contents/MacOS.
 function getBaseDir(): string {
-  if (is.dev) return join(app.getAppPath(), '..')
-  if (process.env['PORTABLE_EXECUTABLE_DIR']) return process.env['PORTABLE_EXECUTABLE_DIR']
-  if (process.platform === 'darwin') return join(dirname(process.execPath), '..', '..', '..')
+  if (is.dev) {
+    return join(app.getAppPath(), '..')
+  } else {
+    if (process.platform === 'win32') {
+      if (process.env['PORTABLE_EXECUTABLE_DIR']) {
+        return process.env['PORTABLE_EXECUTABLE_DIR']
+      }
+    } else if (process.platform === 'linux') {
+      // AppImage: execPath points inside the temporary squashfs mount, not at
+      // the .AppImage file. The AppImage runtime exposes the real file path
+      // via $APPIMAGE — its parent dir is where .venv/ etc. live.
+      if (process.env['APPIMAGE']) {
+        return dirname(process.env['APPIMAGE'])
+      }
+    } else {
+      //Mac
+      return join(dirname(process.execPath), '..', '..', '..')
+    }
+  }
   return dirname(process.execPath)
 }
 
@@ -196,7 +212,7 @@ app.whenReady().then(async () => {
 
     if (error.code === 'ENOENT') {
       message =
-        'Virtual Environment missing or damaged. Please run the command: uv sync and try again'
+        'Virtual Environment missing or damaged. Please run the command: uv sync and try again. CWD: '+getBaseDir()
     } else {
       message =
         'Failed to start the ADK Server. Please check the logs in adk-logs.txt and try again.'

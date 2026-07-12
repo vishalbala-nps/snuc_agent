@@ -170,10 +170,11 @@ export function SettingsDialog({open,setOpen,onNoConfig = false} : SettingsDialo
     <Dialog open={open} onOpenChange={onNoConfig ? undefined : setOpen}>
       <DialogContent showCloseButton={!onNoConfig}>
         <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
+          <DialogTitle>{onNoConfig ? "Welcome to SNUC Agent!" : "Settings"}</DialogTitle>
           <DialogDescription>
-            The model the agent runs on, and the credentials it uses to reach the university
-            portals.
+            {onNoConfig
+              ? "Before you start chatting, pick the model the agent should run on and link your Digiicampus account."
+              : "Manage your AI model and Digiicampus authentication."}
           </DialogDescription>
         </DialogHeader>
 

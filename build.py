@@ -3,6 +3,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+import shutil
 
 ROOT = Path(__file__).resolve().parent
 AGENT_UI_DIR = ROOT / "agent_ui"
@@ -48,14 +49,15 @@ def main() -> None:
         sys.exit(f"Usage: python build.py <{'|'.join(BUILD_TARGETS)}>")
 
     target = sys.argv[1]
-
-    print("Installing agent_ui dependencies ...")
-    result = subprocess.run(["npm", "install"], cwd=AGENT_UI_DIR)
+    NPM = shutil.which("npm")
+    if not NPM:
+        sys.exit("Node.js not installed. Please install Node.js and try again")
+    result = subprocess.run([NPM, "install"], cwd=AGENT_UI_DIR)
     if result.returncode != 0:
         sys.exit(f"npm install failed with exit code {result.returncode}")
 
     print(f"Building agent_ui for {target} ...")
-    result = subprocess.run(["npm", "run", BUILD_TARGETS[target]], cwd=AGENT_UI_DIR)
+    result = subprocess.run([NPM, "run", BUILD_TARGETS[target]], cwd=AGENT_UI_DIR)
     if result.returncode != 0:
         sys.exit(f"electron-builder failed with exit code {result.returncode}")
 
